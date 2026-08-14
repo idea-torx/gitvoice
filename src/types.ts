@@ -135,6 +135,8 @@ export interface InvoiceRecord extends InvoiceDraft {
   number: string;
   status: "draft" | "generated" | "sent" | "paid" | "void";
   currency: string;
+  /** Operator's raw work description. Set on manual invoices only; GitHub-sourced invoices leave it undefined. */
+  manualDescription?: string;
   pdfKey?: string | null;
   createdAt?: string;
 }
@@ -226,6 +228,7 @@ export interface D1InvoiceRow {
   pricing_json: string;
   summary_json: string;
   activity_json: string;
+  manual_description?: string | null;
   pdf_key?: string | null;
   created_at?: string;
 }

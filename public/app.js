@@ -543,6 +543,8 @@ function openInvoiceModal(id) {
   const pdfUrl = `/api/invoices/${encodeURIComponent(id)}/pdf?token=${encodeURIComponent(state.token)}`;
   $("#invoiceModalTitle").textContent = invoice.number;
   $("#invoiceModalClient").textContent = `${invoice.client.name} · ${formatDate(invoice.periodStart)} – ${formatDate(invoice.periodEnd)}`;
+  $("#invoiceManualDescription").classList.toggle("hidden", !invoice.manualDescription);
+  $("#invoiceManualDescriptionText").textContent = invoice.manualDescription || "";
   $("#invoiceFullPage").href = url;
   $("#invoiceDownload").href = pdfUrl;
   $("#invoiceFrame").src = url;

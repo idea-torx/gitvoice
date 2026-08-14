@@ -230,8 +230,8 @@ describe("invoice persistence", () => {
       pdf_key: null,
     });
 
-    expect(preparedSql.match(/\?/g) || []).toHaveLength(16);
-    expect(boundValues).toHaveLength(16);
+    expect(preparedSql.match(/\?/g) || []).toHaveLength(17);
+    expect(boundValues).toHaveLength(17);
   });
 });
 
@@ -339,7 +339,7 @@ describe("manual invoices", () => {
     active: 1,
   };
 
-  const INVOICE_COLUMNS = ["id", "number", "client_id", "status", "period_start", "period_end", "issued_at", "due_at", "currency", "subtotal_cents", "tax_cents", "total_cents", "pricing_json", "summary_json", "activity_json", "pdf_key"];
+  const INVOICE_COLUMNS = ["id", "number", "client_id", "status", "period_start", "period_end", "issued_at", "due_at", "currency", "subtotal_cents", "tax_cents", "total_cents", "pricing_json", "summary_json", "activity_json", "manual_description", "pdf_key"];
 
   /** Minimal in-memory D1 covering the statements the invoice create and portal list paths issue. */
   function manualDb() {
@@ -359,6 +359,7 @@ describe("manual invoices", () => {
             if (sql.includes("FROM invoices WHERE client_id = ? AND period_start")) {
               return invoices.find((row) => row.client_id === bound[0] && row.period_start === bound[1] && row.period_end === bound[2]) || null;
             }
+            if (sql.includes("FROM invoices WHERE id")) return invoices.find((row) => row.id === bound[0]) || null;
             return null;
           },
           async all() {
@@ -418,6 +419,58 @@ describe("manual invoices", () => {
       expect(portal.invoices[0].number).toBe(created.invoice.number);
       expect(portal.invoices[0].totalCents).toBe(250000);
       expect(portal.invoices[0].summary.title).toBe("CGI product renders");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("round-trips the operator's work description on a reloaded manual invoice", async () => {
+    const { db, invoices } = manualDb();
+    const env = { DB: db, ADMIN_TOKEN: "admin-token", PORTAL_SECRET: "portal-secret" } as never;
+    const fetchMock = vi.fn(async () => new Response("{}"));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const response = await worker.fetch(manualRequest("/api/invoices", { description: MANUAL_DESCRIPTION }), env);
+      expect(response.status).toBe(201);
+      const created = (await response.json()) as { invoice: { id: string; manualDescription?: string } };
+      expect(created.invoice.manualDescription).toBe(MANUAL_DESCRIPTION);
+      expect(invoices[0].manual_description).toBe(MANUAL_DESCRIPTION);
+
+      const reloaded = await worker.fetch(
+        new Request(`https://invoice.test/api/invoices/${created.invoice.id}`, { headers: { Authorization: "Bearer admin-token" } }),
+        env,
+      );
+      expect(reloaded.status).toBe(200);
+      const loaded = (await reloaded.json()) as { invoice: { manualDescription?: string; summary: { title: string } } };
+      expect(loaded.invoice.manualDescription).toBe(MANUAL_DESCRIPTION);
+      expect(loaded.invoice.summary.title).toBe("CGI product renders");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("leaves the work description empty on GitHub-sourced invoices", async () => {
+    const { db, invoices } = manualDb();
+    const env = { DB: db, ADMIN_TOKEN: "admin-token", PORTAL_SECRET: "portal-secret" } as never;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("[]")));
+    try {
+      const request = new Request("https://invoice.test/api/invoices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer admin-token" },
+        body: JSON.stringify({ clientId: "client-1", periodStart: "2026-06-01", periodEnd: "2026-06-30", pricing: { model: "flat", amountCents: 250000 } }),
+      });
+      const response = await worker.fetch(request, env);
+      expect(response.status).toBe(201);
+      const created = (await response.json()) as { invoice: { id: string; manualDescription?: string } };
+      expect(created.invoice.manualDescription).toBeUndefined();
+      expect(invoices[0].manual_description).toBeNull();
+
+      const reloaded = await worker.fetch(
+        new Request(`https://invoice.test/api/invoices/${created.invoice.id}`, { headers: { Authorization: "Bearer admin-token" } }),
+        env,
+      );
+      const loaded = (await reloaded.json()) as { invoice: { manualDescription?: string } };
+      expect(loaded.invoice.manualDescription).toBeUndefined();
     } finally {
       vi.unstubAllGlobals();
     }

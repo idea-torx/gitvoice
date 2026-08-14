@@ -89,6 +89,7 @@ export function rowToInvoice(row: D1InvoiceRow, client: Client, provider: Provid
       filesChanged: 0,
       contributors: [],
     }),
+    manualDescription: row.manual_description || undefined,
     pdfKey: row.pdf_key,
     createdAt: row.created_at,
   };
@@ -281,8 +282,8 @@ export async function createInvoiceRow(
     .prepare(
       `INSERT INTO invoices (
         id, number, client_id, status, period_start, period_end, issued_at, due_at, currency,
-        subtotal_cents, tax_cents, total_cents, pricing_json, summary_json, activity_json, pdf_key
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        subtotal_cents, tax_cents, total_cents, pricing_json, summary_json, activity_json, manual_description, pdf_key
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       values.id,
@@ -300,6 +301,7 @@ export async function createInvoiceRow(
       values.pricing_json,
       values.summary_json,
       values.activity_json,
+      values.manual_description ?? null,
       values.pdf_key ?? null,
     )
     .run();

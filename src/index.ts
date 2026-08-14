@@ -348,10 +348,13 @@ async function createInvoice(request: Request, env: Env): Promise<Response> {
   }
 
   const reusablePreview = normalizeReusablePreview(body.preview);
-  const draft = await buildDraft(env, body.clientId, body.periodStart, body.periodEnd, body.pricing, false, reusablePreview, manualInput(body));
+  const manual = manualInput(body);
+  const draft = await buildDraft(env, body.clientId, body.periodStart, body.periodEnd, body.pricing, false, reusablePreview, manual);
   const id = crypto.randomUUID();
   const number = await nextInvoiceNumber(env.DB);
-  const invoice: InvoiceRecord = { ...draft, id, number, status: "generated", currency: draft.client.currency };
+  // The operator's raw description is kept alongside the generated summary; only manual invoices have one.
+  const manualDescription = manual?.description.trim() || undefined;
+  const invoice: InvoiceRecord = { ...draft, id, number, status: "generated", currency: draft.client.currency, manualDescription };
   await createInvoiceRow(env.DB, {
     id,
     number,
@@ -368,6 +371,7 @@ async function createInvoice(request: Request, env: Env): Promise<Response> {
     pricing_json: JSON.stringify(draft.pricing),
     summary_json: JSON.stringify(draft.summary),
     activity_json: JSON.stringify(draft.activity),
+    manual_description: manualDescription ?? null,
     pdf_key: null,
   });
   await ensurePdf(env, invoice);
@@ -579,6 +583,8 @@ function publicInvoice(invoice: InvoiceRecord | InvoiceDraft, dispute: unknown =
     totalCents: invoice.totalCents,
     pricing: invoice.pricing,
     summary: invoice.summary,
+    // Admin-only: the raw work description never reaches the client-facing invoice or portal.
+    ...("manualDescription" in invoice && invoice.manualDescription ? { manualDescription: invoice.manualDescription } : {}),
     activity: {
       commits: invoice.activity.commits,
       repositories: invoice.activity.repositories,
