@@ -1,4 +1,4 @@
-const state = { token: sessionStorage.getItem("gitvoice_token") || "", status: null, mode: "login", setup: null, recoveryCode: "", clients: [], provider: null, invoices: [], preview: null, previewKey: "", openInvoiceId: null };
+const state = { token: sessionStorage.getItem("gitvoice_token") || "", status: null, mode: "login", setup: null, recoveryCode: "", clients: [], provider: null, invoices: [], preview: null, previewKey: "", previewRequest: null, source: "github", openInvoiceId: null };
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
@@ -38,7 +38,8 @@ function bindEvents() {
   $("#brandModal").addEventListener("click", (event) => { if (event.target === event.currentTarget) closeBrandModal(); });
   bindLogoPreview($("#brandLogoUrl"), $("#brandPreviewImage"), setBrandPreviewStatus, { immediate: false });
   $("#invoiceDeleteButton").addEventListener("click", (event) => deleteInvoice(state.openInvoiceId, event.currentTarget));
-  ["periodStart", "periodEnd", "invoiceAmount", "invoiceRate", "invoiceHours", "invoiceDescription"].forEach((id) => $("#" + id).addEventListener("input", invalidatePreview));
+  ["periodStart", "periodEnd", "invoiceAmount", "invoiceRate", "invoiceHours", "invoiceDescription", "manualDescription"].forEach((id) => $("#" + id).addEventListener("input", invalidatePreview));
+  $$("[data-source]").forEach((button) => button.addEventListener("click", () => setSource(button.dataset.source)));
   $$('[data-close]').forEach((button) => button.addEventListener("click", () => {
     const id = button.dataset.close;
     if (id === "invoiceModal") closeInvoiceModal();
@@ -301,25 +302,54 @@ async function recoverAccess(event) {
   }
 }
 
+// Switches the generator between GitHub-sourced invoices and manually described work.
+function setSource(source) {
+  const next = source === "manual" ? "manual" : "github";
+  if (state.source === next) return;
+  state.source = next;
+  const manual = next === "manual";
+  $$("[data-source]").forEach((button) => {
+    const active = button.dataset.source === next;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  $("#manualField").classList.toggle("hidden", !manual);
+  $("#generatorHint").textContent = manual
+    ? "Describe the work performed and we write the client-facing summary."
+    : "Choose the client and exact billing period.";
+  $("#pricingError").textContent = "";
+  invalidatePreview();
+  if (!state.preview) renderPreview(null);
+}
+
 async function preview(event) {
   event.preventDefault();
   const clientId = $("#generatorClient").value;
   if (!clientId) return toast("Choose a client first.");
+  const manual = state.source === "manual";
+  const description = $("#manualDescription").value.trim();
+  if (manual && !description) {
+    $("#pricingError").textContent = "Enter a description of the work performed.";
+    return toast("Describe the work performed first.");
+  }
   const pricing = readPricing();
   if (!pricing) return;
-  const previewKey = JSON.stringify({ clientId, periodStart: $("#periodStart").value, periodEnd: $("#periodEnd").value, pricing });
+  const request = { clientId, periodStart: $("#periodStart").value, periodEnd: $("#periodEnd").value, pricing };
+  if (manual) { request.source = "manual"; request.description = description; }
+  const previewKey = JSON.stringify(request);
   if (state.preview && state.previewKey === previewKey) {
     $("#previewButton").textContent = "Edit summary";
     openPreviewModal();
     return;
   }
-  setBusy($("#previewButton"), true, "Reading GitHub...");
+  setBusy($("#previewButton"), true, manual ? "Writing summary..." : "Reading GitHub...");
   $("#createButton").disabled = true;
   try {
-    const data = await api("/api/preview", { method: "POST", body: { clientId, periodStart: $("#periodStart").value, periodEnd: $("#periodEnd").value, pricing } });
+    const data = await api("/api/preview", { method: "POST", body: request });
     const previousNotes = state.preview?.summary?.notes || "";
     state.preview = data.invoice;
     state.previewKey = previewKey;
+    state.previewRequest = request;
     if (previousNotes) state.preview.summary.notes = previousNotes;
     renderPreview(data.invoice);
     openPreviewModal();
@@ -336,11 +366,14 @@ async function generateInvoice() {
   if (!state.preview) return;
   setBusy($("#createButton"), true, "Generating...");
   try {
-    const data = await api("/api/invoices", { method: "POST", body: { clientId: state.preview.client.id, periodStart: state.preview.periodStart, periodEnd: state.preview.periodEnd, pricing: state.preview.pricing, preview: { summary: state.preview.summary, activity: state.preview.activity } } });
+    const body = { clientId: state.preview.client.id, periodStart: state.preview.periodStart, periodEnd: state.preview.periodEnd, pricing: state.preview.pricing, preview: { summary: state.preview.summary, activity: state.preview.activity } };
+    if (state.previewRequest?.source === "manual") { body.source = "manual"; body.description = state.previewRequest.description; }
+    const data = await api("/api/invoices", { method: "POST", body });
     const existingIndex = state.invoices.findIndex((invoice) => invoice.id === data.invoice?.id);
     if (existingIndex === -1) state.invoices.unshift(data.invoice); else state.invoices[existingIndex] = data.invoice;
     state.preview = null;
     state.previewKey = "";
+    state.previewRequest = null;
     $("#createButton").disabled = true;
     renderPreview(null);
     renderInvoices();
@@ -547,7 +580,7 @@ async function deleteInvoice(id, button) {
 function renderPreview(invoice) {
   const root = $("#previewSummary");
   if (!invoice) {
-    root.innerHTML = `<div class="empty-state"><span>✦</span><p>Your GitHub summary will appear here.</p></div>`;
+    root.innerHTML = `<div class="empty-state"><span>✦</span><p>${state.source === "manual" ? "Your written summary will appear here." : "Your GitHub summary will appear here."}</p></div>`;
     $("#previewButton").textContent = "Preview summary";
     return;
   }
@@ -776,6 +809,7 @@ function invalidatePreview() {
   if (!state.preview) return;
   state.preview = null;
   state.previewKey = "";
+  state.previewRequest = null;
   $("#createButton").disabled = true;
   renderPreview(null);
 }

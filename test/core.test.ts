@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import worker, { allowAuthAttempt, duePeriod, duePeriods, resetAuthRateLimit } from "../src/index";
 import { renderInvoiceHtml } from "../src/invoice";
 import { hashPortalPassword, isPortalPasswordCompatible, issuePortalToken, verifyPortalPassword, verifyPortalToken, generateRecoveryCode, issueAdminToken, verifyAdminToken, hashAdminPassword, verifyAdminPassword } from "../src/security";
-import { buildActivityDigest, buildTimeline, fallbackSummary } from "../src/summary";
+import { buildActivityDigest, buildTimeline, fallbackSummary, summarizeManualActivity } from "../src/summary";
 import { createInvoiceRow, normalizeGithubRepositories } from "../src/repository";
 import { collectGithubActivity, matchesGithubAuthor } from "../src/github";
 import type { Client, InvoiceDraft } from "../src/types";
@@ -309,6 +309,152 @@ describe("authentication rate limiting", () => {
     const throttled = await login();
     expect(throttled.status).toBe(429);
     expect(await throttled.json()).toEqual({ error: "Too many attempts. Try again shortly." });
+  });
+});
+
+describe("manual invoices", () => {
+  const MANUAL_DESCRIPTION = "CGI product renders — 14 hours: hero shots, interior scenes, lighting pass";
+
+  const clientRow = {
+    id: "client-1",
+    name: "Acme Inc.",
+    email: "billing@example.com",
+    address: "456 Market St",
+    github_repos: JSON.stringify(["acme/product"]),
+    github_author: "",
+    project_context: "A client-facing product platform.",
+    summary_priorities: "",
+    cadence: "manual",
+    billing_day: 1,
+    billing_model: "flat",
+    flat_amount_cents: 400000,
+    currency: "USD",
+    payment_method: "wire",
+    payment_terms: "Due on receipt",
+    payment_days: 0,
+    special_terms: "",
+    tax_rate: 0,
+    portal_password_hash: "",
+    portal_password_salt: "",
+    active: 1,
+  };
+
+  const INVOICE_COLUMNS = ["id", "number", "client_id", "status", "period_start", "period_end", "issued_at", "due_at", "currency", "subtotal_cents", "tax_cents", "total_cents", "pricing_json", "summary_json", "activity_json", "pdf_key"];
+
+  /** Minimal in-memory D1 covering the statements the invoice create and portal list paths issue. */
+  function manualDb() {
+    const invoices: Record<string, unknown>[] = [];
+    let counter = 0;
+    const db = {
+      prepare(sql: string) {
+        let bound: unknown[] = [];
+        const statement = {
+          bind(...values: unknown[]) {
+            bound = values;
+            return statement;
+          },
+          async first() {
+            if (sql.includes("FROM clients WHERE id")) return bound[0] === clientRow.id ? clientRow : null;
+            if (sql.includes("INSERT INTO counters")) return { value: (counter += 1) };
+            if (sql.includes("FROM invoices WHERE client_id = ? AND period_start")) {
+              return invoices.find((row) => row.client_id === bound[0] && row.period_start === bound[1] && row.period_end === bound[2]) || null;
+            }
+            return null;
+          },
+          async all() {
+            if (sql.includes("FROM invoices WHERE client_id = ?")) return { results: invoices.filter((row) => row.client_id === bound[0]) };
+            return { results: [] };
+          },
+          async run() {
+            if (sql.includes("INSERT INTO invoices")) invoices.push(Object.fromEntries(INVOICE_COLUMNS.map((column, index) => [column, bound[index]])));
+            return { success: true };
+          },
+        };
+        return statement;
+      },
+    } as unknown as D1Database;
+    return { db, invoices };
+  }
+
+  function manualRequest(path: string, body: Record<string, unknown>): Request {
+    return new Request(`https://invoice.test${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer admin-token" },
+      body: JSON.stringify({ clientId: "client-1", periodStart: "2026-07-01", periodEnd: "2026-07-31", pricing: { model: "flat", amountCents: 250000 }, source: "manual", ...body }),
+    });
+  }
+
+  it("rejects a manual invoice without a description", async () => {
+    const env = { DB: manualDb().db, ADMIN_TOKEN: "admin-token", PORTAL_SECRET: "portal-secret" } as never;
+    const previewed = await worker.fetch(manualRequest("/api/preview", { description: "   " }), env);
+    expect(previewed.status).toBe(400);
+    expect(await previewed.json()).toEqual({ error: "Enter a description of the work performed" });
+    const created = await worker.fetch(manualRequest("/api/invoices", {}), env);
+    expect(created.status).toBe(400);
+    expect(await created.json()).toEqual({ error: "Enter a description of the work performed" });
+  });
+
+  it("persists a manual invoice without reading GitHub and lists it in the client's portal", async () => {
+    const { db, invoices } = manualDb();
+    const env = { DB: db, ADMIN_TOKEN: "admin-token", PORTAL_SECRET: "portal-secret" } as never;
+    const fetchMock = vi.fn(async () => new Response("{}"));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const response = await worker.fetch(manualRequest("/api/invoices", { description: MANUAL_DESCRIPTION }), env);
+      expect(response.status).toBe(201);
+      const created = (await response.json()) as { invoice: { id: string; number: string; totalCents: number; summary: { title: string; deliverables: string[] }; activity: { commits: unknown[] } } };
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(invoices).toHaveLength(1);
+      expect(created.invoice.totalCents).toBe(250000);
+      expect(created.invoice.activity.commits).toEqual([]);
+      expect(created.invoice.summary.title).toBe("CGI product renders");
+
+      const token = await issuePortalToken("client-1", "portal-secret");
+      const listed = await worker.fetch(new Request("https://invoice.test/api/portal/invoices", { headers: { Authorization: `Bearer ${token}` } }), env);
+      expect(listed.status).toBe(200);
+      const portal = (await listed.json()) as { invoices: Array<{ id: string; number: string; totalCents: number; summary: { title: string } }> };
+      expect(portal.invoices).toHaveLength(1);
+      expect(portal.invoices[0].id).toBe(created.invoice.id);
+      expect(portal.invoices[0].number).toBe(created.invoice.number);
+      expect(portal.invoices[0].totalCents).toBe(250000);
+      expect(portal.invoices[0].summary.title).toBe("CGI product renders");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("writes a manual summary from the description instead of the empty-commits fallback", async () => {
+    const workersAi = {
+      run: vi.fn(async () => ({
+        response: JSON.stringify({
+          title: "CGI product render package",
+          overview: "Delivered a complete set of CGI product renders across hero and interior scenes.",
+          activitySummary: "Fourteen hours of CGI production covering hero shots, interior scenes, and a lighting pass.",
+          highlights: ["Hero product shots delivered", "Interior scenes rendered", "Lighting pass completed"],
+          deliverables: ["Hero shot renders", "Interior scene renders", "Lighting pass"],
+          nextSteps: [],
+          timeline: [{ period: "Jul 1 - Jul 31, 2026", title: "Production", detail: "Modelled, lit, and rendered the requested scenes.", commits: 0 }],
+        }),
+      })),
+    };
+    const summary = await summarizeManualActivity(client, "2026-07-01", "2026-07-31", MANUAL_DESCRIPTION, undefined, "gpt-5.6-luna", workersAi as never);
+    expect(workersAi.run).toHaveBeenCalledTimes(1);
+    expect(summary.source).toBe("openai");
+    expect(summary.title).toBe("CGI product render package");
+    expect(summary.deliverables).toContain("Lighting pass");
+    expect(summary.overview).not.toContain("No GitHub commits were recorded for this billing period.");
+    expect(summary.deliverables).not.toContain("No deliverables recorded in GitHub for this period");
+  });
+
+  it("grounds the manual fallback in the operator's own description when no model is configured", async () => {
+    const summary = await summarizeManualActivity(client, "2026-07-01", "2026-07-31", MANUAL_DESCRIPTION);
+    expect(summary.source).toBe("fallback");
+    expect(summary.title).toBe("CGI product renders");
+    expect(summary.deliverables).toContain("Lighting pass");
+    expect(summary.overview).not.toContain("No GitHub commits were recorded for this billing period.");
+    expect(summary.activitySummary).not.toContain("No GitHub activity was recorded for this billing period.");
+    expect(summary.timeline).toHaveLength(1);
+    expect(summary.timeline[0].commits).toBe(0);
   });
 });
 

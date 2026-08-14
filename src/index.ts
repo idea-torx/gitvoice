@@ -22,7 +22,7 @@ import {
   upsertInvoiceDispute,
   upsertClient,
 } from "./repository";
-import { fallbackSummary, summarizeActivity } from "./summary";
+import { fallbackSummary, summarizeActivity, summarizeManualActivity } from "./summary";
 import { generateRecoveryCode, hashAdminPassword, issueAdminToken, issuePortalToken, verifyAdminPassword, verifyAdminToken, verifyPortalPassword, verifyPortalToken } from "./security";
 import type { ActivitySnapshot, AdminState, BillingModel, Client, ClientInput, Env, InvoiceDraft, InvoicePricing, InvoicePricingInput, InvoiceRecord, ProviderProfile, Summary } from "./types";
 
@@ -32,7 +32,7 @@ export default {
       return await route(request, env);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unexpected server error";
-      const status = message === "Unauthorized" || message.includes("Incorrect client password") ? 401 : message.includes("not configured") ? 503 : message.includes("not found") ? 404 : message.includes("required") || message.includes("Invalid") || message.includes("before") || message.includes("Pricing") || message.includes("Enter the") || message.includes("billable") ? 400 : 500;
+      const status = message === "Unauthorized" || message.includes("Incorrect client password") ? 401 : message.includes("not configured") ? 503 : message.includes("not found") ? 404 : message.includes("required") || message.includes("Invalid") || message.includes("before") || message.includes("Pricing") || message.includes("Enter the") || message.includes("Enter a") || message.includes("billable") ? 400 : 500;
       if (status >= 500) console.error(error);
       return json({ error: message }, status);
     }
@@ -42,6 +42,16 @@ export default {
     ctx.waitUntil(runScheduled(controller.scheduledTime, env));
   },
 };
+
+/** Body shared by /api/preview and /api/invoices. `source: "manual"` swaps GitHub collection for the operator's description. */
+interface InvoiceRequestBody {
+  clientId: string;
+  periodStart: string;
+  periodEnd: string;
+  pricing?: InvoicePricingInput;
+  source?: string;
+  description?: string;
+}
 
 const AUTH_RATE_LIMIT_MAX = 10;
 const AUTH_RATE_LIMIT_WINDOW_MS = 60_000;
@@ -317,13 +327,19 @@ async function removeClient(env: Env, id?: string): Promise<Response> {
 }
 
 async function previewInvoice(request: Request, env: Env): Promise<Response> {
-  const body = await readJson<{ clientId: string; periodStart: string; periodEnd: string; pricing?: InvoicePricingInput }>(request);
-  const draft = await buildDraft(env, body.clientId, body.periodStart, body.periodEnd, body.pricing, true);
+  const body = await readJson<InvoiceRequestBody>(request);
+  const draft = await buildDraft(env, body.clientId, body.periodStart, body.periodEnd, body.pricing, true, null, manualInput(body));
   return json({ invoice: publicInvoice(draft), html: renderInvoiceHtml(draft) });
 }
 
+/** Reads the optional manual-entry payload. Returns undefined for the default GitHub-sourced flow. */
+function manualInput(body: InvoiceRequestBody): { description: string } | undefined {
+  if (body.source !== "manual") return undefined;
+  return { description: typeof body.description === "string" ? body.description : "" };
+}
+
 async function createInvoice(request: Request, env: Env): Promise<Response> {
-  const body = await readJson<{ clientId: string; periodStart: string; periodEnd: string; pricing?: InvoicePricingInput; preview?: { summary?: Summary; activity?: ActivitySnapshot } }>(request);
+  const body = await readJson<InvoiceRequestBody & { preview?: { summary?: Summary; activity?: ActivitySnapshot } }>(request);
   const existing = await findInvoiceForPeriod(env.DB, body.clientId, body.periodStart, body.periodEnd);
   if (existing) {
     const client = await getClient(env.DB, existing.client_id);
@@ -332,7 +348,7 @@ async function createInvoice(request: Request, env: Env): Promise<Response> {
   }
 
   const reusablePreview = normalizeReusablePreview(body.preview);
-  const draft = await buildDraft(env, body.clientId, body.periodStart, body.periodEnd, body.pricing, false, reusablePreview);
+  const draft = await buildDraft(env, body.clientId, body.periodStart, body.periodEnd, body.pricing, false, reusablePreview, manualInput(body));
   const id = crypto.randomUUID();
   const number = await nextInvoiceNumber(env.DB);
   const invoice: InvoiceRecord = { ...draft, id, number, status: "generated", currency: draft.client.currency };
@@ -411,22 +427,28 @@ async function loadInvoice(env: Env, id?: string): Promise<InvoiceRecord> {
   return rowToInvoice(row, client, await getProvider(env.DB));
 }
 
-async function buildDraft(env: Env, clientId: string, periodStart: string, periodEnd: string, pricingInput: InvoicePricingInput | undefined, isPreview: boolean, reusablePreview?: { summary: Summary; activity: ActivitySnapshot } | null): Promise<InvoiceDraft> {
+async function buildDraft(env: Env, clientId: string, periodStart: string, periodEnd: string, pricingInput: InvoicePricingInput | undefined, isPreview: boolean, reusablePreview?: { summary: Summary; activity: ActivitySnapshot } | null, manual?: { description: string }): Promise<InvoiceDraft> {
   if (!clientId) throw new Error("Client id is required");
   assertDateRange(periodStart, periodEnd);
+  const manualDescription = manual ? manual.description.trim() : "";
+  if (manual && !manualDescription) throw new Error("Enter a description of the work performed");
   const client = await getClient(env.DB, clientId);
   if (!client) throw new Error("Client not found");
   const pricing = normalizePricing(pricingInput, client);
   const provider = await getProvider(env.DB);
+  // Manual invoices carry no repository evidence, so the GitHub API is never called for them.
   let activity = reusablePreview?.activity || emptyActivity();
-  if (!reusablePreview) {
+  if (!reusablePreview && !manual) {
     try {
       activity = await collectGithubActivity(client, periodStart, periodEnd, env.GITHUB_TOKEN);
     } catch (error) {
       console.error("GitHub activity unavailable", error);
     }
   }
-  const summary = reusablePreview?.summary || await summarizeActivity(client, periodStart, periodEnd, activity, env.OPENAI_API_KEY, env.OPENAI_MODEL || "gpt-5.6-luna", env.AI);
+  const summary = reusablePreview?.summary
+    || (manual
+      ? await summarizeManualActivity(client, periodStart, periodEnd, manualDescription, env.OPENAI_API_KEY, env.OPENAI_MODEL || "gpt-5.6-luna", env.AI)
+      : await summarizeActivity(client, periodStart, periodEnd, activity, env.OPENAI_API_KEY, env.OPENAI_MODEL || "gpt-5.6-luna", env.AI));
   const subtotalCents = pricing.amountCents;
   const taxCents = Math.round(subtotalCents * (client.taxRate / 100));
   const issuedAt = new Date().toISOString();

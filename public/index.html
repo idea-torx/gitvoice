@@ -90,9 +90,13 @@
       <div class="workspace-grid">
         <section class="panel generator-panel">
           <div class="panel-heading">
-            <div><h2>Create invoice</h2><p>Choose the client and exact billing period.</p></div>
+            <div><h2>Create invoice</h2><p id="generatorHint">Choose the client and exact billing period.</p></div>
           </div>
           <form id="generatorForm">
+            <div class="quick-dates source-toggle" role="group" aria-label="Invoice source">
+              <button type="button" class="is-active" data-source="github" aria-pressed="true">From GitHub</button>
+              <button type="button" data-source="manual" aria-pressed="false">Manual entry</button>
+            </div>
             <label class="field"><span>Client</span><select id="generatorClient" required><option value="">Choose a client</option></select></label>
             <div class="field-row">
               <label class="field"><span>From</span><input id="periodStart" class="date-input" type="date" required readonly /></label>
@@ -121,6 +125,11 @@
               <label class="field"><span>Line description <small>Optional</small></span><input id="invoiceDescription" placeholder="Services provided" /></label>
               <div id="pricingError" class="form-error"></div>
             </div>
+
+            <label id="manualField" class="field hidden">
+              <span>Work performed <small>Described in your own words</small></span>
+              <textarea id="manualDescription" rows="4" placeholder="CGI renders for a client — 14 hours: hero shots, interior scenes, lighting pass"></textarea>
+            </label>
 
             <div class="preview-summary" id="previewSummary">
               <div class="empty-state"><span class="empty-icon">✦</span><p>Activity summary and timeline will appear here.</p></div>

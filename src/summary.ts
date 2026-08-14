@@ -27,6 +27,7 @@ const MAX_EVIDENCE_CHARACTERS = 36_000;
 const MAX_STANDOUT_CANDIDATES = 28;
 const WORKERS_AI_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 const SUMMARY_INSTRUCTIONS = "You are a senior delivery lead writing a concise, client-facing software invoice summary from verified GitHub evidence. Reconstruct the larger project narrative; do not narrate a commit list. Lead with the largest completed outcomes, milestones, launches, user-facing capabilities, major integrations, platform work, reliability gains, and substantial testing. Group related implementation, debugging, testing, and polish into one initiative. Never place chores, dependency updates, formatting, or minor fixes ahead of larger achievements. Treat merged pull requests and releases as strong project-level evidence. Client context explains what the product is and what matters, but is not proof that an outcome occurred. Never invent business impact, user adoption, hours, completion status, metrics, or work not supported by the evidence. Describe verified capabilities and engineering outcomes rather than claiming unverified commercial results. The evidence digest was computed from all supplied commits; its category counts cover the full period even when the compact ledger contains representative entries. Return only valid JSON with exactly these keys: title (string describing the period's biggest project beat, not the client name or date), overview (string, 2-3 concise outcome-first sentences), activitySummary (string, 1-2 sentences with supporting measurable activity), highlights (array of 3-6 short strings ordered from most to least important), deliverables (array of 3-8 distinct shipped capabilities or substantial work products, ordered by importance), nextSteps (array of 0-3 short strings only when future work is explicitly evidenced), timeline (array of 3-10 objects with period, title, detail, commits). Keep the timeline chronological while emphasizing the most important achievement inside each period. Do not repeat the same item across highlights and deliverables. Keep each array item under 140 characters and each timeline detail under 200 characters.";
+const MANUAL_SUMMARY_INSTRUCTIONS = "You are a senior delivery lead writing a concise, client-facing invoice summary from a description of work the service provider performed. The provider's description is VERIFIED EVIDENCE: they did this work, and every element of it may be reported as completed. Expand it into a polished, professional client-facing summary that reads like a delivery report rather than a restatement of the note. You may elaborate on the craft, phases, and professional practice implied by the described work, but you must NOT invent specific hours, rates, costs, quantities, deliverables, tools, or outcomes that the description does not imply. Never fabricate client names, dates, metrics, business impact, approvals, or any external fact. When the description mentions hours or counts, you may restate them exactly; never introduce new numbers. Client context explains what the product is and what matters, but is not proof that an outcome occurred. Return only valid JSON with exactly these keys: title (string naming the work performed, not the client name or date), overview (string, 2-3 concise outcome-first sentences), activitySummary (string, 1-2 sentences describing the scope of work covered by this invoice), highlights (array of 3-6 short strings ordered from most to least important), deliverables (array of 3-8 distinct work products described or clearly implied by the description, ordered by importance), nextSteps (array of 0-3 short strings only when future work is explicitly described), timeline (array of 3-10 objects with period, title, detail, commits). For the timeline, describe the phases of work implied by the description (for example preparation, production, review) using the billing period for the period field; set commits to 0 for every entry because no repository activity backs this invoice. Do not repeat the same item across highlights and deliverables. Keep each array item under 140 characters and each timeline detail under 200 characters.";
 const SUMMARY_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -91,6 +92,48 @@ export async function summarizeActivity(
     evidence: buildActivityDigest(activity),
   };
 
+  return requestSummary(SUMMARY_INSTRUCTIONS, payload, fallback, apiKey, model, workersAi);
+}
+
+/**
+ * Summarizes work the operator described by hand. The description is treated as verified
+ * evidence, so this never falls back to the "no commits" summary the GitHub path returns
+ * for an empty activity snapshot.
+ */
+export async function summarizeManualActivity(
+  client: Client,
+  periodStart: string,
+  periodEnd: string,
+  description: string,
+  apiKey?: string,
+  model = "gpt-5.6-luna",
+  workersAi?: Ai,
+): Promise<Summary> {
+  const work = description.trim();
+  const fallback = manualFallbackSummary(client, periodStart, periodEnd, work);
+  if (!work) return fallback;
+
+  const payload = {
+    client: {
+      name: client.name,
+      projectContext: client.projectContext || "Not provided",
+      prioritiesAndMilestones: client.summaryPriorities || "Not provided",
+    },
+    period: { start: periodStart, end: periodEnd },
+    workPerformed: work,
+  };
+
+  return requestSummary(MANUAL_SUMMARY_INSTRUCTIONS, payload, fallback, apiKey, model, workersAi);
+}
+
+async function requestSummary(
+  instructions: string,
+  payload: unknown,
+  fallback: Summary,
+  apiKey?: string,
+  model = "gpt-5.6-luna",
+  workersAi?: Ai,
+): Promise<Summary> {
   if (apiKey) try {
     const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
@@ -99,7 +142,7 @@ export async function summarizeActivity(
         model,
         reasoning: { effort: "medium" },
         text: { verbosity: "low" },
-        instructions: SUMMARY_INSTRUCTIONS,
+        instructions,
         input: JSON.stringify(payload),
         max_output_tokens: 1500,
       }),
@@ -117,7 +160,7 @@ export async function summarizeActivity(
   if (workersAi) try {
     const result = await workersAi.run(WORKERS_AI_MODEL, {
       messages: [
-        { role: "system", content: SUMMARY_INSTRUCTIONS },
+        { role: "system", content: instructions },
         { role: "user", content: JSON.stringify(payload) },
       ],
       response_format: { type: "json_schema", json_schema: SUMMARY_SCHEMA },
@@ -221,6 +264,71 @@ export function fallbackSummary(client: Client, periodStart: string, periodEnd: 
     timeline: buildTimeline(activity.commits),
     source: "fallback",
   };
+}
+
+/**
+ * Deterministic manual-invoice summary used when no model is configured or the model call
+ * fails. It only restructures the operator's own words, so it never claims work the
+ * description does not contain.
+ */
+export function manualFallbackSummary(client: Client, periodStart: string, periodEnd: string, description: string): Summary {
+  const work = description.trim();
+  const period = formatPeriod(periodStart, periodEnd);
+  if (!work) {
+    return {
+      title: `${client.name} - ${period}`,
+      overview: "No description of the work performed was provided for this billing period.",
+      activitySummary: "This invoice was entered manually without a description of the work performed.",
+      highlights: ["No work description provided"],
+      deliverables: ["No work description provided"],
+      nextSteps: [],
+      timeline: [],
+      source: "fallback",
+    };
+  }
+  const segments = manualSegments(work);
+  const title = truncate(sentenceCase(work.split(/\r?\n|[.;:]|\s+[—–]\s+/)[0].trim() || work), 90);
+  return {
+    title,
+    overview: truncate(sentenceCase(work), 600),
+    activitySummary: `Work performed for ${client.name} during ${period}, billed as described below.`,
+    highlights: segments.slice(0, 6),
+    deliverables: segments.slice(0, 8),
+    nextSteps: [],
+    timeline: [{ period, title, detail: truncate(sentenceCase(work), 200), commits: 0 }],
+    source: "fallback",
+  };
+}
+
+/** Splits a free-text work description into short client-facing bullet lines. */
+function manualSegments(description: string): string[] {
+  const coarse = splitAndClean(description, /\r?\n|[;•]|\s+[—–]\s+/);
+  const segments = coarse.length >= 3 ? coarse : splitAndClean(description, /\r?\n|[;•,]|\s+[—–]\s+/);
+  const unique: string[] = [];
+  const seen = new Set<string>();
+  for (const segment of segments.length ? segments : [description.trim()]) {
+    const key = segment.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(segment);
+  }
+  return unique;
+}
+
+function splitAndClean(value: string, separator: RegExp): string[] {
+  return value
+    .split(separator)
+    .map((entry) => truncate(sentenceCase(entry.replace(/^[-*•\s]+/, "").replace(/\s+/g, " ").trim().replace(/[.,]$/, "")), 140))
+    .filter(Boolean);
+}
+
+function sentenceCase(value: string): string {
+  const trimmed = value.trim();
+  return trimmed ? `${trimmed.charAt(0).toUpperCase()}${trimmed.slice(1)}` : "";
+}
+
+function truncate(value: string, limit: number): string {
+  return value.length <= limit ? value : `${value.slice(0, limit - 1).trimEnd()}…`;
 }
 
 export function buildTimeline(commits: ActivitySnapshot["commits"]): TimelineEntry[] {
