@@ -1,9 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "gitvoice",
-  // Leave empty to fall back to the CLOUDFLARE_ACCOUNT_ID environment variable,
-  // or fill in your own account id.
-  "account_id": "",
   "main": "src/index.ts",
   "compatibility_date": "2026-03-24",
   "compatibility_flags": ["nodejs_compat"],
@@ -25,7 +22,8 @@
     {
       "binding": "DB",
       "database_name": "gitvoice",
-      // Run `npx wrangler d1 create gitvoice` and paste the returned id here.
+      // Required before deploying: run `npx wrangler d1 create gitvoice`, then copy the
+      // `database_id` value it prints and paste it here, replacing the placeholder below.
       "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID",
       "migrations_dir": "migrations"
     }

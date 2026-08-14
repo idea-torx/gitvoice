@@ -43,6 +43,37 @@ export default {
   },
 };
 
+const AUTH_RATE_LIMIT_MAX = 10;
+const AUTH_RATE_LIMIT_WINDOW_MS = 60_000;
+const authAttempts = new Map<string, number[]>();
+
+function clientAddress(request: Request): string {
+  return request.headers.get("CF-Connecting-IP") || "local";
+}
+
+/** Records an authentication attempt. Returns false once an address exceeds 10 attempts in a rolling 60s window. */
+export function allowAuthAttempt(request: Request, now = Date.now()): boolean {
+  const address = clientAddress(request);
+  const recent = (authAttempts.get(address) || []).filter((at) => now - at < AUTH_RATE_LIMIT_WINDOW_MS);
+  const allowed = recent.length < AUTH_RATE_LIMIT_MAX;
+  if (allowed) recent.push(now);
+  authAttempts.set(address, recent);
+  if (authAttempts.size > 5000) {
+    for (const [key, attempts] of authAttempts) {
+      if (attempts.every((at) => now - at >= AUTH_RATE_LIMIT_WINDOW_MS)) authAttempts.delete(key);
+    }
+  }
+  return allowed;
+}
+
+export function resetAuthRateLimit(): void {
+  authAttempts.clear();
+}
+
+function tooManyAttempts(): Response {
+  return json({ error: "Too many attempts. Try again shortly." }, 429);
+}
+
 async function route(request: Request, env: Env): Promise<Response> {
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders() });
   const url = new URL(request.url);
@@ -108,6 +139,7 @@ async function status(request: Request, env: Env): Promise<Response> {
 }
 
 async function authenticateAdmin(request: Request, env: Env): Promise<Response> {
+  if (!allowAuthAttempt(request)) return tooManyAttempts();
   const body = await readJson<{ password?: string }>(request);
   const password = body.password || "";
   const admin = await getAdminState(env.DB);
@@ -123,6 +155,7 @@ async function authenticateAdmin(request: Request, env: Env): Promise<Response> 
 }
 
 async function recoverAdmin(request: Request, env: Env): Promise<Response> {
+  if (!allowAuthAttempt(request)) return tooManyAttempts();
   const body = await readJson<{ recoveryCode?: string; password?: string }>(request);
   const code = (body.recoveryCode || "").trim();
   const password = body.password || "";
@@ -186,6 +219,7 @@ async function portalClients(request: Request, env: Env): Promise<Response> {
 }
 
 async function portalAuth(request: Request, env: Env): Promise<Response> {
+  if (!allowAuthAttempt(request)) return tooManyAttempts();
   const body = await readJson<{ clientId: string; password: string }>(request);
   if (!body.clientId) throw new Error("Client is required");
   if (!body.password) throw new Error("Password is required");
@@ -649,7 +683,7 @@ function isoDay(date: Date): string {
 }
 
 function corsHeaders(): HeadersInit {
-  return { "access-control-allow-origin": "*", "access-control-allow-headers": "Authorization, Content-Type", "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS" };
+  return { "access-control-allow-headers": "Authorization, Content-Type", "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS" };
 }
 
 function json(value: unknown, status = 200): Response {

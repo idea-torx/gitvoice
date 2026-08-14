@@ -4,8 +4,8 @@
   "description": "Gitvoice — turn client GitHub activity into clear, multi-page invoices on Cloudflare Workers, with a password-protected client portal.",
   "type": "module",
   "scripts": {
-    "dev": "node scripts/ensure-dev-vars.mjs && wrangler dev --var APP_ORIGIN:http://localhost:8787 --var OPENAI_MODEL:gpt-5.6-luna",
-    "dev:local": "node scripts/ensure-dev-vars.mjs && wrangler dev --config wrangler.local.jsonc --var APP_ORIGIN:http://localhost:8787 --var OPENAI_MODEL:gpt-5.6-luna",
+    "dev": "node scripts/ensure-dev-vars.mjs && wrangler dev --var APP_ORIGIN:http://localhost:8787",
+    "dev:local": "node scripts/ensure-dev-vars.mjs && wrangler dev --config wrangler.local.jsonc --var APP_ORIGIN:http://localhost:8787",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "build": "tsc --noEmit false --outDir dist",

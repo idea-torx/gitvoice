@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import worker, { duePeriod, duePeriods } from "../src/index";
+import worker, { allowAuthAttempt, duePeriod, duePeriods, resetAuthRateLimit } from "../src/index";
 import { renderInvoiceHtml } from "../src/invoice";
 import { hashPortalPassword, isPortalPasswordCompatible, issuePortalToken, verifyPortalPassword, verifyPortalToken, generateRecoveryCode, issueAdminToken, verifyAdminToken, hashAdminPassword, verifyAdminPassword } from "../src/security";
 import { buildActivityDigest, buildTimeline, fallbackSummary } from "../src/summary";
@@ -276,6 +276,39 @@ describe("admin authentication", () => {
 
   it("generates grouped recovery codes", () => {
     expect(generateRecoveryCode()).toMatch(/^GV-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/);
+  });
+});
+
+describe("authentication rate limiting", () => {
+  function unconfiguredDb(): D1Database {
+    const statement = { first: async () => null, all: async () => ({ results: [] }), run: async () => ({ success: true }), bind: () => statement };
+    return { prepare: () => statement } as unknown as D1Database;
+  }
+
+  function attempt(ip: string, now: number): boolean {
+    return allowAuthAttempt(new Request("https://invoice.test/api/auth", { method: "POST", headers: { "CF-Connecting-IP": ip } }), now);
+  }
+
+  it("blocks an address after 10 attempts and frees it once the window rolls past", () => {
+    resetAuthRateLimit();
+    const start = Date.parse("2026-08-13T12:00:00Z");
+    for (let index = 0; index < 10; index += 1) expect(attempt("203.0.113.7", start + index)).toBe(true);
+    expect(attempt("203.0.113.7", start + 10)).toBe(false);
+    expect(attempt("203.0.113.8", start + 10)).toBe(true);
+    expect(attempt("203.0.113.7", start + 60_000)).toBe(true);
+  });
+
+  it("answers a throttled login with 429", async () => {
+    resetAuthRateLimit();
+    const env = { DB: unconfiguredDb(), ADMIN_TOKEN: "setup-token", PORTAL_SECRET: "portal-secret" } as never;
+    const login = () => worker.fetch(
+      new Request("https://invoice.test/api/auth", { method: "POST", headers: { "Content-Type": "application/json", "CF-Connecting-IP": "198.51.100.4" }, body: JSON.stringify({ password: "wrong" }) }),
+      env,
+    );
+    for (let index = 0; index < 10; index += 1) expect((await login()).status).toBe(401);
+    const throttled = await login();
+    expect(throttled.status).toBe(429);
+    expect(await throttled.json()).toEqual({ error: "Too many attempts. Try again shortly." });
   });
 });
 
