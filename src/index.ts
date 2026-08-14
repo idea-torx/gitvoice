@@ -102,6 +102,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path.startsWith("/portal/invoices/") && path.endsWith("/dispute") && request.method === "POST") return portalDispute(request, env, path.split("/")[3]);
   if (path.startsWith("/portal/invoices/") && path.endsWith("/pdf") && request.method === "GET") return portalInvoicePdf(request, env, path.split("/")[3]);
   if (path.startsWith("/portal/invoices/") && request.method === "GET") return portalInvoiceHtml(request, env, path.split("/").pop());
+  if (path.startsWith("/public/") && request.method === "GET") return publicAsset(request, env, path.slice("/public/".length));
 
   if ((path.startsWith("/api/") && !path.startsWith("/api/portal/")) || path.startsWith("/invoice/")) {
     await requireAuth(request, env);
@@ -716,4 +717,16 @@ function corsHeaders(): HeadersInit {
 
 function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json; charset=utf-8", ...corsHeaders() } });
+}
+
+async function publicAsset(request: Request, env: Env, key: string): Promise<Response> {
+  if (!env.INVOICE_PDFS) return new Response("storage not configured", { status: 500 });
+  if (!key || !/^[A-Za-z0-9._-]+$/.test(key)) return new Response("bad key", { status: 400 });
+  const obj = await env.INVOICE_PDFS.get(key);
+  if (!obj) return new Response("not found", { status: 404 });
+  const headers = new Headers();
+  obj.writeHttpMetadata(headers);
+  headers.set("etag", obj.httpEtag);
+  headers.set("Cache-Control", "public, max-age=3600");
+  return new Response(obj.body, { headers });
 }
