@@ -285,7 +285,7 @@ a { color: inherit; }
 .auth-screen { position: fixed; inset: 0; z-index: 90; display: grid; place-items: safe center; overflow-y: auto; padding: 24px; background: var(--canvas); }
 .auth-glow { position: fixed; top: 0; left: 50%; transform: translateX(-50%); width: 110vw; height: 88vh; pointer-events: none; background: radial-gradient(52% 52% at 50% 22%, rgba(0, 113, 227, 0.20), transparent 70%); }
 .auth-brand { display: flex; align-items: center; gap: 11px; }
-.auth-brand .brand-mark { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 11px; background: linear-gradient(135deg, #3b8dff, #0057cf); color: #fff; font-size: 16px; font-weight: 700; letter-spacing: -0.03em; box-shadow: 0 8px 22px rgba(0, 87, 207, 0.35); }
+.auth-brand .auth-logo { width: 40px; height: 40px; display: block; border-radius: 11px; box-shadow: 0 8px 22px rgba(0, 87, 207, 0.35); }
 .auth-brand .brand-word { font-size: 21px; font-weight: 650; letter-spacing: -0.02em; color: var(--ink); }
 .auth-eyebrow { margin: 0 0 4px; color: var(--accent); font-size: 11px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; }
 .auth-hint { margin: 14px 0 2px; color: var(--subtle); font-size: 11px; line-height: 1.4; text-align: center; }
@@ -457,6 +457,7 @@ a { color: inherit; }
 :root[data-theme="dark"] .loading-line { background: linear-gradient(90deg, #141417 25%, #1d1d20 50%, #141417 75%); }
 :root[data-theme="dark"] .password-toggle:focus-visible { outline-color: var(--focus-ring); }
 :root:not([data-theme="dark"]) .brand-logo:not(.has-custom-logo) { content: url("/logo.svg"); }
+:root:not([data-theme="dark"]) .auth-logo { content: url("/logo.svg"); }
 :root:not([data-theme="dark"]) .logo-preview:not(.has-custom-logo) { content: url("/logo.svg"); }
 
 .setup-modal-card { width: min(100%, 640px); }

@@ -1,0 +1,43 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "invoicer-pro",
+  "account_id": "762c442739063d6e1792708c84e3806e",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-03-24",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true
+  },
+  "browser": {
+    "binding": "BROWSER",
+    "remote": true
+  },
+  "ai": {
+    "binding": "AI",
+    "remote": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "invoicer-pro",
+      "database_id": "01460da9-f2c2-4626-8fe5-0c51175aa56b",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "INVOICE_PDFS",
+      "bucket_name": "invoicer-pro-pdfs"
+    }
+  ],
+  "triggers": {
+    "crons": ["0 8 * * *"]
+  },
+  "vars": {
+    "APP_ORIGIN": "https://invoicer-pro.ideatorx.workers.dev",
+    "OPENAI_MODEL": "gpt-5.6-luna"
+  }
+}
