@@ -220,14 +220,6 @@ def cmd_get(args):
     print(json.dumps(data, indent=2, default=str))
 
 
-def cmd_pdf(args):
-    token = require_auth(args.base)
-    status, data = request(args.base, f"/api/invoices/{args.id}/pdf", token=token)
-    if status != 200:
-        die(f"pdf failed (HTTP {status}): {data}")
-    print(json.dumps(data, indent=2, default=str))
-
-
 def cmd_list(args):
     token = require_auth(args.base)
     status, data = request(args.base, "/api/invoices", token=token)
@@ -552,7 +544,6 @@ def main():
     cr.add_argument("--amount-cents", type=int)
     cr.add_argument("--yes", action="store_true")
     sub.add_parser("get").add_argument("id")
-    sub.add_parser("pdf").add_argument("id")
     sub.add_parser("list")
 
     args = p.parse_args()
