@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node scripts/ensure-dev-vars.mjs && wrangler dev --var APP_ORIGIN:http://localhost:8787",
     "dev:local": "node scripts/ensure-dev-vars.mjs && wrangler dev --config wrangler.local.jsonc --var APP_ORIGIN:http://localhost:8787",
-    "deploy:prod": "wrangler deploy --config wrangler.local.jsonc",
+    "deploy:prod": "wrangler d1 migrations apply invoicer-pro --config wrangler.local.jsonc --remote && wrangler deploy --config wrangler.local.jsonc",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "build": "tsc --noEmit false --outDir dist",
