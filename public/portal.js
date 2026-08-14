@@ -9,6 +9,8 @@ const state = {
 
 const $ = (selector) => document.querySelector(selector);
 
+const DEFAULT_LOGO = "/logo-white.svg";
+
 document.addEventListener("DOMContentLoaded", () => {
   bindPasswordToggles();
   $("#portalDashboardButton").addEventListener("click", () => { window.location.href = "/"; });
@@ -46,9 +48,28 @@ function applyProviderBrand() {
   if (hint) hint.textContent = `Use the password shared with you by ${businessName}.`;
   const logo = document.querySelector(".portal-logo");
   if (logo) {
-    if (logoUrl) { logo.src = logoUrl; logo.classList.add("has-custom-logo"); }
-    else { logo.src = "/logo-white.svg"; logo.classList.remove("has-custom-logo"); }
+    logo.alt = businessName;
+    applyLogo(logo, logoUrl);
   }
+}
+
+// Mirrors the admin header: show the provider logo when one is set, otherwise the
+// bundled Gitvoice mark — including when the custom image fails to load.
+function applyLogo(image, url) {
+  const value = String(url || "").trim();
+  image.onerror = null;
+  if (!value) {
+    image.classList.remove("has-custom-logo");
+    image.src = DEFAULT_LOGO;
+    return;
+  }
+  image.onerror = () => {
+    image.onerror = null;
+    image.classList.remove("has-custom-logo");
+    image.src = DEFAULT_LOGO;
+  };
+  image.classList.add("has-custom-logo");
+  image.src = value;
 }
 
 function renderClients() {

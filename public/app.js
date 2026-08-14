@@ -3,6 +3,8 @@ const state = { token: sessionStorage.getItem("gitvoice_token") || "", status: n
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
+const DEFAULT_LOGO = "/logo-white.svg";
+
 document.addEventListener("DOMContentLoaded", () => {
   initStyledSelects();
   initDatePickers();
@@ -30,14 +32,25 @@ function bindEvents() {
   $("#clientForm").addEventListener("submit", saveClient);
   $("#settingsButton").addEventListener("click", openSettingsModal);
   $("#settingsForm").addEventListener("submit", saveSettings);
+  $("#brandLogoButton").addEventListener("click", openBrandModal);
+  $("#brandForm").addEventListener("submit", saveBrandLogo);
+  $("#brandRemoveButton").addEventListener("click", removeBrandLogo);
+  $("#brandModal").addEventListener("click", (event) => { if (event.target === event.currentTarget) closeBrandModal(); });
+  bindLogoPreview($("#brandLogoUrl"), $("#brandPreviewImage"), setBrandPreviewStatus, { immediate: false });
   $("#invoiceDeleteButton").addEventListener("click", (event) => deleteInvoice(state.openInvoiceId, event.currentTarget));
   ["periodStart", "periodEnd", "invoiceAmount", "invoiceRate", "invoiceHours", "invoiceDescription"].forEach((id) => $("#" + id).addEventListener("input", invalidatePreview));
-  $$('[data-close]').forEach((button) => button.addEventListener("click", () => button.dataset.close === "invoiceModal" ? closeInvoiceModal() : closeModal(button.dataset.close)));
+  $$('[data-close]').forEach((button) => button.addEventListener("click", () => {
+    const id = button.dataset.close;
+    if (id === "invoiceModal") closeInvoiceModal();
+    else if (id === "brandModal") closeBrandModal();
+    else closeModal(id);
+  }));
   $$("[data-period]").forEach((button) => button.addEventListener("click", () => { setPeriod(button.dataset.period); invalidatePreview(); }));
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     if (!$("#invoiceModal").classList.contains("hidden")) closeInvoiceModal();
     if (!$("#previewModal").classList.contains("hidden")) closePreviewModal();
+    if (!$("#brandModal").classList.contains("hidden")) closeBrandModal();
   });
 }
 
@@ -175,7 +188,7 @@ function renderSetupStep() {
     title.textContent = "Your business";
     next.textContent = "Continue";
     const p = s.provider || {};
-    body.innerHTML = `<p class="modal-description">These details appear on your invoices and client portal. You can change them later.</p><label class="field"><span>Business or brand</span><input id="setupBusiness" value="${esc(p.businessName || "")}" placeholder="Acme Inc." /></label><label class="field"><span>Provider name</span><input id="setupProviderName" value="${esc(p.providerName || "")}" placeholder="Your name" /></label><label class="field"><span>Address</span><textarea id="setupAddress" rows="3">${esc(p.address || "")}</textarea></label><div class="field-row"><label class="field"><span>Email</span><input id="setupEmail" type="email" value="${esc(p.email || "")}" /></label><label class="field"><span>Website</span><input id="setupWebsite" value="${esc(p.website || "")}" /></label></div><label class="field"><span>Logo URL <small>Optional</small></span><input id="setupLogo" value="${esc(p.logoUrl || "")}" placeholder="https://example.com/logo.png" /></label><label class="field"><span>Tax ID <small>Optional</small></span><input id="setupTaxId" value="${esc(p.taxId || "")}" /></label><label class="field"><span>Alternative payment instructions <small>Optional</small></span><textarea id="setupRemittance" rows="3" placeholder="Optional payment link or instructions">${esc(p.remittance || "")}</textarea></label>`;
+    body.innerHTML = `<p class="modal-description">These details appear on your invoices and client portal. You can change them later.</p><label class="field"><span>Business or brand</span><input id="setupBusiness" value="${esc(p.businessName || "")}" placeholder="Acme Inc." /></label><label class="field"><span>Provider name</span><input id="setupProviderName" value="${esc(p.providerName || "")}" placeholder="Your name" /></label><label class="field"><span>Address</span><textarea id="setupAddress" rows="3">${esc(p.address || "")}</textarea></label><div class="field-row"><label class="field"><span>Email</span><input id="setupEmail" type="email" value="${esc(p.email || "")}" /></label><label class="field"><span>Website</span><input id="setupWebsite" value="${esc(p.website || "")}" /></label></div><div class="field"><span>Logo URL <small>Optional</small></span><div class="logo-field-row"><span class="logo-thumb"><img id="setupLogoPreview" class="logo-preview" src="/logo-white.svg" alt="Logo preview" /></span><input id="setupLogo" type="url" inputmode="url" autocomplete="off" spellcheck="false" aria-label="Logo URL" value="${esc(p.logoUrl || "")}" placeholder="https://example.com/logo.svg" /></div><small>Leave blank to use the Gitvoice mark.</small></div><label class="field"><span>Tax ID <small>Optional</small></span><input id="setupTaxId" value="${esc(p.taxId || "")}" /></label><label class="field"><span>Alternative payment instructions <small>Optional</small></span><textarea id="setupRemittance" rows="3" placeholder="Optional payment link or instructions">${esc(p.remittance || "")}</textarea></label>`;
   } else if (s.step === 3) {
     title.textContent = "First client";
     next.textContent = "Finish setup";
@@ -187,6 +200,8 @@ function renderSetupStep() {
     next.textContent = "Go to workspace";
     body.innerHTML = `<p class="modal-description">Save this recovery code somewhere safe. It's the only way to reset your password.</p><div class="recovery-code">${esc(state.recoveryCode)}</div><p class="auth-hint">You won't see this code again.</p>`;
   }
+
+  if (s.step === 2) bindLogoPreview($("#setupLogo"), $("#setupLogoPreview"));
 }
 
 function handleSetupSubmit(event) {
@@ -348,12 +363,119 @@ function render() {
 }
 
 function applyProviderBrand() {
-  const logoUrl = state.provider?.logoUrl || "";
   const logo = document.querySelector(".brand-logo");
-  if (logo) {
-    if (logoUrl) { logo.src = logoUrl; logo.classList.add("has-custom-logo"); }
-    else { logo.removeAttribute("src"); logo.src = "/logo-white.svg"; logo.classList.remove("has-custom-logo"); }
+  if (logo) applyLogoPreview(logo, state.provider?.logoUrl || "");
+}
+
+// Swaps an <img> between a custom logo URL and the bundled Gitvoice mark, falling
+// back to the mark when the custom image cannot be loaded. `onStatus` receives
+// "custom", "error", or "default".
+function applyLogoPreview(image, url, onStatus) {
+  const value = String(url || "").trim();
+  image.onload = null;
+  image.onerror = null;
+  if (!value) {
+    image.classList.remove("has-custom-logo");
+    image.src = DEFAULT_LOGO;
+    if (onStatus) onStatus("default");
+    return;
   }
+  image.onload = () => { image.onload = null; image.onerror = null; if (onStatus) onStatus("custom"); };
+  image.onerror = () => {
+    image.onload = null;
+    image.onerror = null;
+    image.classList.remove("has-custom-logo");
+    image.src = DEFAULT_LOGO;
+    if (onStatus) onStatus("error");
+  };
+  image.classList.add("has-custom-logo");
+  image.src = value;
+}
+
+function bindLogoPreview(input, image, onStatus, options = {}) {
+  if (!input || !image) return;
+  let timer = 0;
+  const update = () => applyLogoPreview(image, input.value, onStatus);
+  input.addEventListener("input", () => { window.clearTimeout(timer); timer = window.setTimeout(update, 260); });
+  input.addEventListener("change", () => { window.clearTimeout(timer); update(); });
+  if (options.immediate !== false) update();
+}
+
+function setBrandPreviewStatus(status) {
+  const label = $("#brandPreviewLabel");
+  const note = $("#brandPreviewNote");
+  note.classList.toggle("is-invalid", status === "error");
+  if (status === "custom") {
+    label.textContent = "Your logo";
+    note.textContent = "Loaded from the URL below.";
+  } else if (status === "error") {
+    label.textContent = "Gitvoice mark";
+    note.textContent = "That image could not be loaded. Check the URL and try again.";
+  } else {
+    label.textContent = "Gitvoice mark";
+    note.textContent = "The bundled default is used until you add your own.";
+  }
+}
+
+function openBrandModal() {
+  const input = $("#brandLogoUrl");
+  const saved = state.provider?.logoUrl || "";
+  input.value = saved;
+  $("#brandError").textContent = "";
+  $("#brandRemoveButton").disabled = !saved;
+  applyLogoPreview($("#brandPreviewImage"), saved, setBrandPreviewStatus);
+  $("#brandModal").classList.remove("hidden");
+  setTimeout(() => input.focus(), 0);
+}
+
+function closeBrandModal() {
+  closeModal("brandModal");
+  $("#brandError").textContent = "";
+  const trigger = $("#brandLogoButton");
+  if (trigger) trigger.focus();
+}
+
+function saveBrandLogo(event) {
+  event.preventDefault();
+  persistLogoUrl($("#brandLogoUrl").value.trim(), $("#brandSaveButton"), "Save", "Brand logo updated.");
+}
+
+function removeBrandLogo() {
+  persistLogoUrl("", $("#brandRemoveButton"), "Remove", "Brand logo reset to the Gitvoice mark.");
+}
+
+async function persistLogoUrl(logoUrl, button, label, message) {
+  $("#brandError").textContent = "";
+  setBusy(button, true, "Saving…");
+  try {
+    const data = await api("/api/settings", { method: "PUT", body: { ...providerPayload(), logoUrl } });
+    state.provider = data.provider;
+    applyProviderBrand();
+    const settingsField = $("#providerLogo");
+    if (settingsField) settingsField.value = state.provider?.logoUrl || "";
+    closeBrandModal();
+    toast(message);
+  } catch (error) {
+    $("#brandError").textContent = error.message || "Could not save the brand logo.";
+  } finally {
+    setBusy(button, false, label);
+  }
+}
+
+// The settings endpoint replaces the whole provider record, so every field has to
+// be sent back even when only the logo changes.
+function providerPayload() {
+  const provider = state.provider || {};
+  return {
+    businessName: provider.businessName || "",
+    logoUrl: provider.logoUrl || "",
+    providerName: provider.providerName || "",
+    address: provider.address || "",
+    email: provider.email || "",
+    website: provider.website || "",
+    taxId: provider.taxId || "",
+    remittance: provider.remittance || "",
+  };
 }
 
 function renderClients() {

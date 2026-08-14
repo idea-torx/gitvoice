@@ -6,6 +6,7 @@
     <meta name="theme-color" content="#000000" />
     <meta name="description" content="Gitvoice turns client GitHub activity into clear, polished invoices." />
     <title>Gitvoice</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="stylesheet" href="/styles.css" />
     <script>
       (function () {
@@ -59,7 +60,7 @@
 
     <header class="site-header">
       <div class="header-inner">
-        <a class="brand-lockup" href="/" aria-label="Gitvoice home"><img class="brand-logo" src="/logo-white.svg" alt="Gitvoice" /></a>
+        <div class="brand-lockup"><button id="brandLogoButton" class="brand-logo-button" type="button" aria-label="Update brand logo" aria-haspopup="dialog"><img class="brand-logo" src="/logo-white.svg" alt="Gitvoice" /></button></div>
         <nav class="header-actions" aria-label="Workspace actions">
           <button class="icon-button theme-toggle" type="button" data-theme-toggle aria-label="Switch to light mode"><svg class="theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.4M12 19.1v2.4M2.5 12h2.4M19.1 12h2.4M5 5l1.7 1.7M17.3 17.3L19 19M19 5l-1.7 1.7M6.7 17.3L5 19"/></svg><svg class="theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg></button>
           <a class="button button-secondary header-portal" href="/portal">Client portal</a>
@@ -212,6 +213,24 @@
         <label class="field"><span>Alternative payment instructions</span><textarea id="providerRemittance" rows="4" placeholder="Optional payment link or alternative instructions"></textarea><small>E-transfer invoices use your provider email automatically. Wire details stay private and are available on request.</small></label>
         <div class="modal-actions"><button type="button" class="button button-secondary" data-close="settingsModal">Cancel</button><button class="button button-primary" type="submit">Save settings</button></div>
         <div id="settingsError" class="form-error"></div>
+      </form>
+    </div>
+
+    <div id="brandModal" class="modal-backdrop hidden">
+      <form id="brandForm" class="modal-card brand-modal-card" role="dialog" aria-modal="true" aria-labelledby="brandModalTitle">
+        <div class="modal-heading"><div><p class="section-label">Branding</p><h2 id="brandModalTitle">Brand logo</h2></div><button type="button" class="close-button" data-close="brandModal" aria-label="Close brand logo">×</button></div>
+        <p class="modal-description">Your logo appears in this header, on every invoice, and in the client portal.</p>
+        <div class="brand-preview">
+          <div class="brand-preview-frame"><img id="brandPreviewImage" class="brand-preview-image logo-preview" src="/logo-white.svg" alt="Brand logo preview" /></div>
+          <div class="brand-preview-meta"><strong id="brandPreviewLabel">Gitvoice mark</strong><span id="brandPreviewNote">The bundled default is used until you add your own.</span></div>
+        </div>
+        <label class="field"><span>Logo URL <small>Optional</small></span><input id="brandLogoUrl" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://example.com/logo.svg" /><small>A hosted SVG or PNG with a transparent background looks best.</small></label>
+        <div class="modal-actions brand-modal-actions">
+          <button type="button" id="brandRemoveButton" class="button button-quiet">Remove</button>
+          <button type="button" class="button button-secondary" data-close="brandModal">Cancel</button>
+          <button id="brandSaveButton" class="button button-primary" type="submit">Save</button>
+        </div>
+        <div id="brandError" class="form-error"></div>
       </form>
     </div>
 

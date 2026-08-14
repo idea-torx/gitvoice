@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="112" height="112" viewBox="12 8 88 96" fill="none" role="img" aria-label="Gitvoice">
+  <defs>
+    <mask id="gvDoc" maskUnits="userSpaceOnUse" x="46" y="28" width="52" height="56">
+      <path d="M56 32H76L94 50V74A6 6 0 0 1 88 80H56A6 6 0 0 1 50 74V38A6 6 0 0 1 56 32Z" fill="#fff"/>
+      <path d="M76 30V50H96" fill="none" stroke="#000" stroke-width="5.5"/>
+      <path d="M62 61H84M62 71H76" fill="none" stroke="#000" stroke-width="6" stroke-linecap="round"/>
+    </mask>
+  </defs>
+  <path d="M28 33.5V78.5M28 56H50" stroke="#38BDF8" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="28" cy="22" r="8" fill="none" stroke="#38BDF8" stroke-width="7"/>
+  <circle cx="28" cy="90" r="8" fill="none" stroke="#38BDF8" stroke-width="7"/>
+  <rect x="46" y="28" width="52" height="56" fill="#38BDF8" mask="url(#gvDoc)"/>
+</svg>

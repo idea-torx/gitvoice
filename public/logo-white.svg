@@ -1,5 +1,26 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="560" height="112" viewBox="0 0 560 112" role="img" aria-label="Gitvoice">
-  <text x="0" y="78" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="66" font-weight="700" letter-spacing="-2">
-    <tspan fill="#ffffff">Git</tspan><tspan fill="#7cc0ff">voice</tspan>
+<svg xmlns="http://www.w3.org/2000/svg" width="464" height="112" viewBox="0 0 464 112" fill="none" role="img" aria-label="Gitvoice">
+  <defs>
+    <linearGradient id="gvMark" gradientUnits="userSpaceOnUse" x1="16" y1="12" x2="98" y2="100">
+      <stop stop-color="#3B82F6"/>
+      <stop offset="1" stop-color="#22D3EE"/>
+    </linearGradient>
+    <linearGradient id="gvWord" gradientUnits="userSpaceOnUse" x1="248" y1="0" x2="400" y2="0">
+      <stop stop-color="#60A5FA"/>
+      <stop offset="1" stop-color="#22D3EE"/>
+    </linearGradient>
+    <mask id="gvDoc" maskUnits="userSpaceOnUse" x="46" y="28" width="52" height="56">
+      <path d="M56 32H76L94 50V74A6 6 0 0 1 88 80H56A6 6 0 0 1 50 74V38A6 6 0 0 1 56 32Z" fill="#fff"/>
+      <path d="M76 30V50H96" fill="none" stroke="#000" stroke-width="5.5"/>
+      <path d="M62 61H84M62 71H76" fill="none" stroke="#000" stroke-width="6" stroke-linecap="round"/>
+    </mask>
+  </defs>
+  <g>
+    <path d="M28 33.5V78.5M28 56H50" stroke="url(#gvMark)" stroke-width="7" stroke-linecap="round"/>
+    <circle cx="28" cy="22" r="8" fill="none" stroke="url(#gvMark)" stroke-width="7"/>
+    <circle cx="28" cy="90" r="8" fill="none" stroke="url(#gvMark)" stroke-width="7"/>
+    <rect x="46" y="28" width="52" height="56" fill="url(#gvMark)" mask="url(#gvDoc)"/>
+  </g>
+  <text x="134" y="79" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="64" font-weight="700" letter-spacing="-1.5">
+    <tspan fill="#FFFFFF">Git</tspan><tspan fill="url(#gvWord)">voice</tspan>
   </text>
 </svg>
