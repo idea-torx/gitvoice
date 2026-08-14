@@ -93,9 +93,9 @@ After setup, you sign in with your admin password. The `ADMIN_TOKEN` remains a w
 
 ## Running your own instance alongside the repo
 
-`wrangler.jsonc` is the generic, shareable configuration. To keep your personal Cloudflare account, database, bucket, and Worker origin out of version control, use a gitignored local overlay:
+`wrangler.jsonc` is the generic, shareable configuration. `wrangler.local.jsonc` is a tracked overlay for a specific instance (this repo carries the maintainer's as a working example — resource identifiers only, no secrets; those stay in the gitignored `.dev.vars`):
 
-1. Copy `wrangler.jsonc` to `wrangler.local.jsonc` and fill in your own `account_id`, `database_id`, `bucket_name`, and `APP_ORIGIN`. This file is already ignored by `.gitignore`.
+1. Edit `wrangler.local.jsonc` (or copy `wrangler.jsonc` over it) and fill in your own `account_id`, `database_id`, `bucket_name`, and `APP_ORIGIN`.
 2. Develop and deploy against it with:
 
    ```bash
