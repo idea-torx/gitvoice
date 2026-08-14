@@ -53,9 +53,13 @@ def keychain_secret():
     return r.stdout.strip()
 
 
+# Cloudflare's bot rules 403 the default Python-urllib user-agent (error 1010).
+USER_AGENT = "gitvoice-agent/0.1"
+
+
 def request(base, path, method="GET", token=None, payload=None, timeout=30):
     url = base.rstrip("/") + path
-    headers = {"Content-Type": "application/json"}
+    headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     body = json.dumps(payload).encode() if payload is not None else None
@@ -82,7 +86,7 @@ def request(base, path, method="GET", token=None, payload=None, timeout=30):
 def request_bytes(base, path, token=None, timeout=60):
     """Fetch raw bytes (for PDF downloads). Raises on HTTP error."""
     url = base.rstrip("/") + path
-    headers = {}
+    headers = {"User-Agent": USER_AGENT}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(url, headers=headers, method="GET")
