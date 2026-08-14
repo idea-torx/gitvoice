@@ -41,7 +41,7 @@ a { color: inherit; }
 .brand-logo-button:hover { border-color: var(--line-strong); background: var(--accent-soft); }
 .brand-logo-button:active { opacity: 0.72; }
 .brand-logo-button:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
-.brand-logo { width: 96px; height: auto; display: block; }
+.brand-logo { height: 36px; width: auto; max-width: 160px; display: block; }
 .header-actions { display: flex; align-items: center; gap: 10px; }
 .status-pill { display: inline-flex; align-items: center; gap: 7px; margin-right: 4px; color: var(--subtle); font-size: 12px; white-space: nowrap; }
 .status-pill i { width: 7px; height: 7px; border-radius: 50%; background: #a1a1a6; }
@@ -355,7 +355,7 @@ a { color: inherit; }
   .header-inner, .shell { width: min(100% - 32px, 1180px); }
   .site-header { position: relative; }
   .header-inner { min-height: 64px; }
-  .brand-logo { width: 86px; }
+  .brand-logo { height: 32px; }
   .brand-logo-button { padding: 5px 6px; }
   .status-pill { display: none; }
   .header-actions { gap: 3px; }

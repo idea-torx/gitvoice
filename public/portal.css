@@ -31,7 +31,7 @@ a { color: inherit; }
 
 .portal-nav { width: min(980px, calc(100% - 48px)); min-height: 58px; flex: 0 0 auto; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
 .portal-brand { display: inline-flex; align-items: center; text-decoration: none; }
-.portal-logo { width: 96px; height: auto; display: block; }
+.portal-logo { height: 36px; width: auto; max-width: 160px; display: block; }
 .portal-nav-note { color: var(--muted); font-size: 12px; }
 
 .portal-shell { width: min(720px, calc(100% - 48px)); flex: 1 0 auto; margin: 0 auto; padding: 72px 0 44px; }
@@ -139,7 +139,7 @@ a { color: inherit; }
 
 @media (max-width: 640px) {
   .portal-nav, .portal-shell, .portal-footer { width: min(100% - 32px, 720px); }
-  .portal-logo { width: 86px; }
+  .portal-logo { height: 32px; }
   .portal-shell { padding-top: 48px; }
   .portal-card { padding: 20px; border-radius: 18px; }
   .portal-invoice-card .portal-card-heading { align-items: flex-start; flex-direction: column; }
