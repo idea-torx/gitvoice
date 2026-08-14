@@ -1,0 +1,20 @@
+{
+  "name": "gitvoice",
+  "version": "0.1.0",
+  "description": "Gitvoice — turn client GitHub activity into clear, multi-page invoices on Cloudflare Workers, with a password-protected client portal.",
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/ensure-dev-vars.mjs && wrangler dev --var APP_ORIGIN:http://localhost:8787 --var OPENAI_MODEL:gpt-5.6-luna",
+    "dev:local": "node scripts/ensure-dev-vars.mjs && wrangler dev --config wrangler.local.jsonc --var APP_ORIGIN:http://localhost:8787 --var OPENAI_MODEL:gpt-5.6-luna",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "tsc --noEmit false --outDir dist",
+    "render:sample": "npm run build && node scripts/render-sample.mjs"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260731.1",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.118.0"
+  }
+}

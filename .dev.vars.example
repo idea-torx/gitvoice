@@ -1,0 +1,4 @@
+ADMIN_TOKEN="change-me-in-wrangler-secret"
+PORTAL_SECRET="use-a-separate-long-random-secret"
+GITHUB_TOKEN="ghp_your_read_only_token"
+OPENAI_API_KEY="sk-your-key"

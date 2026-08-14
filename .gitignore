@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+wrangler.local.jsonc
+output/
+tmp/
+*.log

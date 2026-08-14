@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#000000" />
+    <meta name="description" content="View your invoices securely." />
+    <title>Client Portal · Gitvoice</title>
+    <link rel="stylesheet" href="/portal.css" />
+    <script>
+      (function () {
+        var storedTheme = localStorage.getItem("invoicer_theme");
+        var theme = storedTheme === "light" || storedTheme === "dark"
+          ? storedTheme
+          : window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        document.documentElement.setAttribute("data-theme", theme);
+        function sync() {
+          document.documentElement.setAttribute("data-theme", theme);
+          var themeColor = document.querySelector('meta[name="theme-color"]');
+          if (themeColor) themeColor.setAttribute("content", theme === "dark" ? "#09090b" : "#f5f5f7");
+          var btns = document.querySelectorAll("[data-theme-toggle]");
+          for (var i = 0; i < btns.length; i++) {
+            btns[i].setAttribute("aria-pressed", theme === "dark");
+            btns[i].setAttribute("aria-label", theme === "dark" ? "Switch to light mode" : "Switch to dark mode");
+          }
+        }
+        document.addEventListener("click", function (event) {
+          var btn = event.target && event.target.closest ? event.target.closest("[data-theme-toggle]") : null;
+          if (!btn) return;
+          theme = theme === "dark" ? "light" : "dark";
+          localStorage.setItem("invoicer_theme", theme);
+          sync();
+        });
+        document.addEventListener("DOMContentLoaded", sync, { once: true });
+        sync();
+      })();
+    </script>
+  </head>
+  <body>
+    <header class="portal-nav">
+      <a class="portal-brand" href="/portal" aria-label="Gitvoice client portal"><img class="portal-logo" src="/logo-white.svg" alt="Gitvoice" /></a>
+      <div class="portal-nav-actions">
+        <button class="icon-button theme-toggle" type="button" data-theme-toggle aria-label="Switch to light mode"><svg class="theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.4M12 19.1v2.4M2.5 12h2.4M19.1 12h2.4M5 5l1.7 1.7M17.3 17.3L19 19M19 5l-1.7 1.7M6.7 17.3L5 19"/></svg><svg class="theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg></button>
+        <span class="portal-nav-note">Client portal</span>
+      </div>
+    </header>
+
+    <main class="portal-shell">
+      <section id="clientStep" class="portal-card">
+        <div class="portal-card-heading"><div><h2>Choose your company</h2></div></div>
+        <div id="clientList" class="portal-client-list"><div class="portal-loading"></div><div class="portal-loading short"></div><div class="portal-loading"></div></div>
+        <p id="clientError" class="portal-error" role="alert"></p>
+      </section>
+
+      <section id="passwordStep" class="portal-card portal-password-card hidden">
+        <button id="backButton" class="portal-back" type="button">← Back to companies</button>
+        <div class="portal-password-body">
+          <div class="portal-card-heading"><div><h2 id="selectedClientName">Enter your password</h2><p id="portalProviderHint">Use the password shared with you by Gitvoice.</p></div></div>
+          <form id="passwordForm">
+            <label class="portal-field"><span>Client password</span><div class="secret-input"><input id="clientPassword" type="password" autocomplete="current-password" placeholder="Enter your password" required /><button class="password-toggle" type="button" data-password-toggle="clientPassword" aria-label="Show client password" aria-pressed="false"><span class="password-eye" aria-hidden="true"></span></button></div></label>
+            <button class="portal-button portal-button-primary" type="submit">View invoices</button>
+            <p id="passwordError" class="portal-error" role="alert"></p>
+          </form>
+        </div>
+      </section>
+
+      <section id="invoiceStep" class="portal-card portal-invoice-card hidden">
+        <div class="portal-card-heading"><div><p class="portal-eyebrow">Invoice archive</p><h2 id="invoiceClientName">Your invoices</h2></div><button id="portalSignOut" class="portal-button portal-button-secondary" type="button">Change client</button></div>
+        <div id="invoiceList" class="portal-invoice-list"></div>
+        <p id="invoiceError" class="portal-error" role="alert"></p>
+      </section>
+    </main>
+
+    <div id="invoiceModal" class="portal-modal-backdrop hidden">
+      <section class="portal-invoice-modal" role="dialog" aria-modal="true" aria-labelledby="invoiceModalTitle">
+        <div class="portal-invoice-modal-header">
+          <div><p class="portal-eyebrow">Invoice preview</p><h2 id="invoiceModalTitle">Invoice</h2><p id="invoiceModalMeta" class="portal-invoice-modal-meta"></p></div>
+          <div class="portal-invoice-modal-actions">
+            <a id="invoiceDownload" class="portal-button portal-button-primary" href="#" download>Download PDF</a>
+            <a id="invoiceFullPage" class="portal-button portal-button-secondary" href="#" target="_blank" rel="noopener" aria-label="Open invoice full page" title="Open full page">Open</a>
+            <button id="invoiceModalClose" class="portal-modal-close" type="button" aria-label="Close invoice preview">×</button>
+          </div>
+        </div>
+        <div class="portal-invoice-frame-shell"><iframe id="invoiceFrame" title="Invoice preview"></iframe></div>
+        <div class="portal-invoice-modal-footer">
+          <div id="disputePrompt" class="portal-dispute-prompt"><button id="portalDisputeButton" class="portal-button portal-button-danger" type="button">Dispute invoice</button><span id="disputeNote">See something that needs correcting? Let us know.</span></div>
+          <form id="disputeForm" class="portal-dispute-form hidden">
+            <label class="portal-field"><span>What needs attention? <small>Optional</small></span><textarea id="disputeReason" rows="3" maxlength="2000" placeholder="Tell us what you would like us to review."></textarea></label>
+            <div class="portal-dispute-actions"><button id="disputeCancel" class="portal-button portal-button-secondary" type="button">Cancel</button><button class="portal-button portal-button-danger" type="submit">Send dispute</button></div>
+            <p id="disputeError" class="portal-error" role="alert"></p>
+          </form>
+        </div>
+      </section>
+    </div>
+
+    <footer class="portal-footer"><span id="portalBrandName">Gitvoice</span><button id="portalDashboardButton" class="portal-admin-link" type="button">Dashboard</button><span>Private client access</span></footer>
+    <script type="module" src="/portal.js"></script>
+  </body>
+</html>

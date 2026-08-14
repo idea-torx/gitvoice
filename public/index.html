@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#000000" />
+    <meta name="description" content="Gitvoice turns client GitHub activity into clear, polished invoices." />
+    <title>Gitvoice</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script>
+      (function () {
+        var storedTheme = localStorage.getItem("invoicer_theme");
+        var theme = storedTheme === "light" || storedTheme === "dark"
+          ? storedTheme
+          : window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        document.documentElement.setAttribute("data-theme", theme);
+        function sync() {
+          document.documentElement.setAttribute("data-theme", theme);
+          var themeColor = document.querySelector('meta[name="theme-color"]');
+          if (themeColor) themeColor.setAttribute("content", theme === "dark" ? "#09090b" : "#f5f5f7");
+          var btns = document.querySelectorAll("[data-theme-toggle]");
+          for (var i = 0; i < btns.length; i++) {
+            btns[i].setAttribute("aria-pressed", theme === "dark");
+            btns[i].setAttribute("aria-label", theme === "dark" ? "Switch to light mode" : "Switch to dark mode");
+          }
+        }
+        document.addEventListener("click", function (event) {
+          var btn = event.target && event.target.closest ? event.target.closest("[data-theme-toggle]") : null;
+          if (!btn) return;
+          theme = theme === "dark" ? "light" : "dark";
+          localStorage.setItem("invoicer_theme", theme);
+          sync();
+        });
+        document.addEventListener("DOMContentLoaded", sync, { once: true });
+        sync();
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="authGate" class="auth-screen">
+      <div class="auth-glow" aria-hidden="true"></div>
+      <form id="authForm" class="auth-card">
+        <div class="auth-brand">
+          <span class="brand-mark" aria-hidden="true">GV</span>
+          <span class="brand-word">Gitvoice</span>
+        </div>
+        <div class="auth-copy">
+          <h1 id="authTitle">Git to invoice, instantly.</h1>
+          <p id="authSubcopy">Sign in to your workspace.</p>
+        </div>
+        <label id="authField" class="field">
+          <div class="secret-input"><input id="tokenInput" type="password" autocomplete="current-password" placeholder="Enter your admin password" /><button class="password-toggle" type="button" data-password-toggle="tokenInput" aria-label="Show password" aria-pressed="false"><span class="password-eye" aria-hidden="true"></span></button></div>
+        </label>
+        <button id="authSubmit" class="button button-primary button-full" type="submit">Sign in</button>
+        <p class="auth-hint"><button id="recoverLink" class="text-button" type="button">Lost access? Use your recovery code</button></p>
+        <div id="authError" class="form-error" role="alert"></div>
+      </form>
+    </div>
+
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="brand-lockup" href="/" aria-label="Gitvoice home"><img class="brand-logo" src="/logo-white.svg" alt="Gitvoice" /></a>
+        <nav class="header-actions" aria-label="Workspace actions">
+          <button class="icon-button theme-toggle" type="button" data-theme-toggle aria-label="Switch to light mode"><svg class="theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.4M12 19.1v2.4M2.5 12h2.4M19.1 12h2.4M5 5l1.7 1.7M17.3 17.3L19 19M19 5l-1.7 1.7M6.7 17.3L5 19"/></svg><svg class="theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg></button>
+          <a class="button button-secondary header-portal" href="/portal">Client portal</a>
+          <button id="signOutButton" class="button button-quiet" type="button">Sign out</button>
+        </nav>
+      </div>
+    </header>
+
+    <main class="shell">
+      <section class="page-intro">
+        <div>
+          <p class="section-label">Workspace</p>
+          <h1>Invoices</h1>
+        </div>
+        <button id="newClientButton" class="button button-primary" type="button">Add client</button>
+      </section>
+
+      <section class="summary-bar" aria-label="Invoice overview">
+        <article class="summary-item"><span>Active clients</span><strong id="statClients">0</strong></article>
+        <article class="summary-item">
+          <div class="summary-item-label"><div class="summary-period-control"><select id="statPeriod" aria-label="Invoice total period"><option value="month">This month</option><option value="last-month">Last month</option><option value="quarter">This quarter</option><option value="last-quarter">Last quarter</option><option value="year">This year</option><option value="last-year">Last year</option><option value="all">All time</option></select></div></div>
+          <strong id="statTotal">$0</strong>
+        </article>
+        <article class="summary-item"><span>Last refreshed</span><strong id="statSync">—</strong></article>
+      </section>
+
+      <div class="workspace-grid">
+        <section class="panel generator-panel">
+          <div class="panel-heading">
+            <div><h2>Create invoice</h2><p>Choose the client and exact billing period.</p></div>
+          </div>
+          <form id="generatorForm">
+            <label class="field"><span>Client</span><select id="generatorClient" required><option value="">Choose a client</option></select></label>
+            <div class="field-row">
+              <label class="field"><span>From</span><input id="periodStart" class="date-input" type="date" required readonly /></label>
+              <label class="field"><span>To</span><input id="periodEnd" class="date-input" type="date" required readonly /></label>
+            </div>
+            <div class="quick-dates" aria-label="Quick billing periods">
+              <button type="button" data-period="week">Last week</button>
+              <button type="button" data-period="month">Last month</button>
+              <button type="button" data-period="current">This month</button>
+            </div>
+
+            <div id="pricingFields" class="pricing-card hidden" aria-live="polite">
+              <div class="pricing-heading">
+                <div><span class="field-caption">Billing</span><strong id="pricingModelLabel">Choose a client</strong></div>
+                <span id="pricingDefaultHint" class="pricing-hint"></span>
+              </div>
+              <div id="flatPricingFields">
+                <label class="field"><span>Flat fee for this period</span><input id="invoiceAmount" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="0.00" /></label>
+              </div>
+              <div id="hourlyPricingFields" class="hidden">
+                <div class="field-row">
+                  <label class="field"><span>Hourly rate</span><input id="invoiceRate" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="0.00" /></label>
+                  <label class="field"><span>Billable hours</span><input id="invoiceHours" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="0.00" /></label>
+                </div>
+              </div>
+              <label class="field"><span>Line description <small>Optional</small></span><input id="invoiceDescription" placeholder="Services provided" /></label>
+              <div id="pricingError" class="form-error"></div>
+            </div>
+
+            <div class="preview-summary" id="previewSummary">
+              <div class="empty-state"><span class="empty-icon">✦</span><p>Activity summary and timeline will appear here.</p></div>
+            </div>
+            <div class="form-actions">
+              <button id="previewButton" class="button button-secondary" type="submit">Preview summary</button>
+              <button id="createButton" class="button button-primary" type="button" disabled>Generate invoice</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel clients-panel">
+          <div class="panel-heading">
+            <div><h2>Clients</h2><p>Billing models, repositories, and portal access.</p></div>
+            <span id="clientCount" class="count-badge"></span>
+          </div>
+          <div id="clientList" class="client-list"><div class="loading-line"></div><div class="loading-line short"></div></div>
+          <div class="panel-footer">
+            <span>Provider and payment details</span>
+            <button id="settingsButton" class="text-button" type="button">Manage settings</button>
+          </div>
+        </section>
+      </div>
+
+      <section class="panel invoices-panel">
+        <div class="panel-heading">
+          <div><h2>Recent invoices</h2><p>Generated documents and billing history.</p></div>
+          <span id="archiveCount" class="count-badge">0 invoices</span>
+        </div>
+        <div id="invoiceList" class="invoice-list"><div class="empty-state"><span class="empty-icon">⌁</span><p>Generated invoices will appear here.</p></div></div>
+      </section>
+
+      <footer class="site-footer"><span>Gitvoice</span><span>GitHub activity, made billable.</span></footer>
+    </main>
+
+    <div id="clientModal" class="modal-backdrop hidden">
+      <form id="clientForm" class="modal-card client-modal-card">
+        <div class="modal-heading"><div><p class="section-label">Client profile</p><h2 id="clientModalTitle">Add client</h2></div><button type="button" class="close-button" data-close="clientModal" aria-label="Close client form">×</button></div>
+        <input id="clientId" type="hidden" />
+        <div class="field-row">
+          <label class="field"><span>Client or company</span><input id="clientName" required placeholder="Acme Inc." /></label>
+          <label class="field"><span>Billing email</span><input id="clientEmail" type="email" placeholder="billing@example.com" /></label>
+        </div>
+        <label class="field"><span>Address</span><textarea id="clientAddress" rows="3" placeholder="Street address&#10;City, Province&#10;Country"></textarea></label>
+        <label class="field"><span>GitHub repositories</span><textarea id="clientRepos" rows="3" placeholder="https://github.com/owner/repository&#10;owner/another-repository"></textarea><small>Paste GitHub URLs or owner/repository names. Spaces, commas, new lines, and adjacent GitHub URLs are accepted.</small></label>
+        <div class="field-row">
+          <label class="field"><span>GitHub authors <small>Optional</small></span><input id="clientAuthor" placeholder="octocat, Jane Doe" /><small>Comma-separate GitHub handles or local Git author names.</small></label>
+          <label class="field"><span>Currency</span><select id="clientCurrency"><option>USD</option><option>CAD</option><option>EUR</option><option>GBP</option><option>AUD</option></select></label>
+        </div>
+        <div class="form-section">
+          <div class="form-section-heading"><h3>Summary context</h3><p>Help the invoice recognize the larger project story and rank the work that matters most.</p></div>
+          <label class="field"><span>Project description <small>Optional</small></span><textarea id="clientProjectContext" rows="2" maxlength="4000" placeholder="What the product does, who it serves, and the current stage of the project."></textarea></label>
+          <label class="field"><span>Priorities and milestones <small>Optional</small></span><textarea id="clientSummaryPriorities" rows="2" maxlength="4000" placeholder="Current goals, launches, major deliverables, or areas that should be emphasized."></textarea></label>
+        </div>
+        <div class="form-section">
+          <div class="form-section-heading"><h3>Billing</h3><p>The roster stores the billing model only. The exact fee, or rate and hours, is required on every invoice.</p></div>
+          <div class="field-row">
+            <label class="field"><span>Billing model</span><select id="clientBillingModel"><option value="flat">Flat fee</option><option value="hourly">Hourly</option></select></label>
+            <label class="field"><span>Tax rate %</span><input id="clientTax" type="number" min="0" max="100" step="0.01" inputmode="decimal" placeholder="0" /></label>
+          </div>
+          <div class="field-row">
+            <label class="field"><span>Summary cadence</span><select id="clientCadence"><option value="manual">Manual</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></label>
+            <label class="field"><span>Payment days</span><input id="clientPaymentDays" type="number" min="0" max="365" placeholder="0" /></label>
+          </div>
+          <div class="field-row">
+            <label class="field"><span>Payment method</span><select id="clientPaymentMethod" required><option value="etransfer">E-transfer</option><option value="wire">Wire transfer</option><option value="alternative">Alternative</option></select></label>
+            <label class="field"><span>Payment terms</span><input id="clientPaymentTerms" value="Due on receipt" required /></label>
+          </div>
+        </div>
+        <div class="form-section">
+          <div class="form-section-heading"><h3>Client portal</h3><p>Assign one password for this client’s invoice archive.</p></div>
+        <label class="field"><span>Portal password</span><div class="secret-input"><input id="clientPortalPassword" type="password" autocomplete="new-password" placeholder="Set a client password" /><button class="password-toggle" type="button" data-password-toggle="clientPortalPassword" aria-label="Show client portal password" aria-pressed="false"><span class="password-eye" aria-hidden="true"></span></button></div><small>Leave blank while editing to keep the current password.</small></label>
+        </div>
+        <label class="field"><span>Special terms</span><textarea id="clientTerms" rows="2" placeholder="Retainer details or client-specific notes."></textarea></label>
+        <div class="modal-actions"><button type="button" class="button button-secondary" data-close="clientModal">Cancel</button><button class="button button-primary" type="submit">Save client</button></div>
+        <div id="clientError" class="form-error"></div>
+      </form>
+    </div>
+
+    <div id="settingsModal" class="modal-backdrop hidden">
+      <form id="settingsForm" class="modal-card">
+        <div class="modal-heading"><div><p class="section-label">Workspace</p><h2>Provider settings</h2></div><button type="button" class="close-button" data-close="settingsModal" aria-label="Close provider settings">×</button></div>
+        <p class="modal-description">These details appear on every invoice. Payment instructions are only rendered for authenticated requests.</p>
+        <label class="field"><span>Business or brand</span><input id="providerBusiness" required /></label>
+        <label class="field"><span>Logo URL <small>Optional</small></span><input id="providerLogo" placeholder="https://example.com/logo.png" /><small>Leave blank to use the bundled Gitvoice logo. Appears on invoices and the client portal.</small></label>
+        <label class="field"><span>Provider name</span><input id="providerName" required /></label>
+        <label class="field"><span>Address</span><textarea id="providerAddress" rows="3"></textarea></label>
+        <div class="field-row"><label class="field"><span>Email</span><input id="providerEmail" type="email" /></label><label class="field"><span>Website</span><input id="providerWebsite" /></label></div>
+        <label class="field"><span>Tax ID <small>Optional</small></span><input id="providerTaxId" /></label>
+        <label class="field"><span>Alternative payment instructions</span><textarea id="providerRemittance" rows="4" placeholder="Optional payment link or alternative instructions"></textarea><small>E-transfer invoices use your provider email automatically. Wire details stay private and are available on request.</small></label>
+        <div class="modal-actions"><button type="button" class="button button-secondary" data-close="settingsModal">Cancel</button><button class="button button-primary" type="submit">Save settings</button></div>
+        <div id="settingsError" class="form-error"></div>
+      </form>
+    </div>
+
+    <div id="invoiceModal" class="modal-backdrop hidden">
+      <section class="invoice-modal-card" role="dialog" aria-modal="true" aria-labelledby="invoiceModalTitle">
+        <div class="invoice-modal-header">
+          <div><p class="section-label">Invoice preview</p><h2 id="invoiceModalTitle">Invoice</h2><p id="invoiceModalClient" class="invoice-modal-client"></p></div>
+          <div class="invoice-modal-header-actions">
+            <a id="invoiceDownload" class="button button-primary" href="#" download>Download PDF</a>
+            <a id="invoiceFullPage" class="button button-secondary" href="#" target="_blank" rel="noopener">Open full page</a>
+            <button type="button" class="close-button" data-close="invoiceModal" aria-label="Close invoice preview">×</button>
+          </div>
+        </div>
+        <div class="invoice-frame-shell"><iframe id="invoiceFrame" title="Invoice preview"></iframe></div>
+        <div class="invoice-modal-footer">
+          <button id="invoiceDeleteButton" class="button button-danger" type="button">Delete invoice</button>
+          <span>Deletion permanently removes this invoice and its stored PDF.</span>
+        </div>
+      </section>
+    </div>
+
+    <div id="previewModal" class="modal-backdrop hidden">
+      <form id="previewForm" class="modal-card preview-modal-card">
+        <div class="modal-heading"><div><p class="section-label">Summary preview</p><h2>Review & edit</h2></div><button type="button" class="close-button" data-close="previewModal" aria-label="Close summary preview">×</button></div>
+        <p class="modal-description">The AI draft is fully editable. Adjust the copy, then create the invoice — your edits appear on the PDF.</p>
+        <div id="previewEditor"></div>
+        <div class="modal-actions"><button type="button" class="button button-secondary" data-close="previewModal">Cancel</button><button class="button button-primary" type="submit">Create invoice</button></div>
+      </form>
+    </div>
+
+    <div id="setupModal" class="modal-backdrop hidden">
+      <form id="setupForm" class="modal-card setup-modal-card">
+        <div class="modal-heading"><div><p class="section-label">Setup</p><h2 id="setupTitle">Secure access</h2></div></div>
+        <div class="setup-progress" aria-hidden="true"><span class="setup-progress-step active" data-setup-step="1"></span><span class="setup-progress-step" data-setup-step="2"></span><span class="setup-progress-step" data-setup-step="3"></span></div>
+        <div id="setupBody"></div>
+        <div class="modal-actions"><button type="button" id="setupBack" class="button button-secondary hidden">Back</button><button type="submit" id="setupNext" class="button button-primary">Continue</button></div>
+        <div id="setupError" class="form-error"></div>
+      </form>
+    </div>
+
+    <div id="recoverModal" class="modal-backdrop hidden">
+      <form id="recoverForm" class="modal-card">
+        <div class="modal-heading"><div><p class="section-label">Recover access</p><h2>Reset your password</h2></div><button type="button" class="close-button" data-close="recoverModal" aria-label="Close recovery">×</button></div>
+        <p class="modal-description">Enter the recovery code you saved during setup and choose a new password.</p>
+        <div id="recoverFields">
+          <label class="field"><span>Recovery code</span><input id="recoverCode" placeholder="GV-XXXX-XXXX-XXXX-XXXX" autocomplete="off" /></label>
+          <label class="field"><span>New password</span><div class="secret-input"><input id="recoverPassword" type="password" autocomplete="new-password" placeholder="At least 8 characters" /></div></label>
+          <div class="modal-actions"><button type="button" class="button button-secondary" data-close="recoverModal">Cancel</button><button class="button button-primary" type="submit">Reset password</button></div>
+        </div>
+        <div id="recoverDone" class="hidden">
+          <p class="modal-description">Your password was reset. Save this new recovery code — the previous one no longer works.</p>
+          <div class="recovery-code" id="recoverNewCode"></div>
+          <div class="modal-actions"><button type="button" id="recoverDoneButton" class="button button-primary">Sign in</button></div>
+        </div>
+        <div id="recoverError" class="form-error"></div>
+      </form>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
