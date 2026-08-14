@@ -2,6 +2,16 @@
 
 Gitvoice turns a client's GitHub activity into a clear, multi-page invoice. It ships as a Cloudflare Worker with a private admin workspace and a simple password-protected client portal.
 
+**Open source. Agent-ready.** The whole product — worker, portal, and a zero-dependency agent CLI — lives in this repo, and any AI agent can run it end-to-end:
+
+```bash
+curl -fsSL https://invoicer-pro.ideatorx.workers.dev/agent-cli/gitvoice-agent.py -o gitvoice-agent.py
+export GITVOICE_ADMIN_TOKEN="your-admin-token"
+python3 gitvoice-agent.py --help
+```
+
+Create clients (with portal passwords), generate LLM-written invoices, download PDFs, run backups, and onboard the whole workspace — from Claude Code, Codex, OpenCode, Hermes, or a plain terminal. See [`agent-cli/README.md`](public/agent-cli/README.md) for the full surface.
+
 ## What it does
 
 - Pulls commits from one or more GitHub repositories for a chosen week, month, or custom date range.
