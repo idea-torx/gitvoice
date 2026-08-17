@@ -514,7 +514,7 @@ def main():
     ca = sub.add_parser("client-add")
     ca.add_argument("--name", required=True)
     ca.add_argument("--email", required=True)
-    ca.add_argument("--currency", default="USD")
+    ca.add_argument("--currency", default="CAD")
     ca.add_argument("--model", choices=["hourly", "flat"], default="hourly")
     ca.add_argument("--rate-cents", type=int, default=0)
     ca.add_argument("--portal-password")

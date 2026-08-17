@@ -335,7 +335,7 @@ function normalizeClientInput(input: ClientInput): Client {
     billingDay: Math.max(1, Math.min(31, Math.floor(input.billingDay || 1))),
     billingModel: input.billingModel === "hourly" ? "hourly" : "flat",
     defaultRateCents: Math.max(0, Math.round(Number(input.defaultRateCents ?? input.flatAmountCents) || 0)),
-    currency: (input.currency || "USD").trim().toUpperCase().slice(0, 3),
+    currency: (input.currency || "CAD").trim().toUpperCase().slice(0, 3),
     paymentMethod: normalizePaymentMethod(input.paymentMethod),
     paymentTerms: required(input.paymentTerms || "Due on receipt", "Payment terms"),
     paymentDays: Math.max(0, Math.min(365, Math.floor(input.paymentDays || 0))),
