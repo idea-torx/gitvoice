@@ -12,6 +12,15 @@ python3 gitvoice-agent.py --help
 
 Create clients (with portal passwords), generate LLM-written invoices, download PDFs, run backups, and onboard the whole workspace — from Claude Code, Codex, OpenCode, Hermes, or a plain terminal. See [`agent-cli/README.md`](public/agent-cli/README.md) for the full surface.
 
+## Live deployment and handoff
+
+- **Product workspace:** https://invoicer-pro.ideatorx.workers.dev/
+- **Custom domain:** `https://gitvoice.dev` (DNS/custom-domain binding is managed separately from this repository)
+- **Public source:** https://github.com/idea-torx/gitvoice
+- **Marketing site source:** https://github.com/idea-torx/gitvoice-site
+
+The public repository is the source of truth for the open-source product. Production secrets, D1/R2 resource credentials, and admin tokens must remain outside git. The tracked `wrangler.local.jsonc` contains the maintainer's resource identifiers and deployment variables; secrets are supplied through Cloudflare and local environment files.
+
 ## What it does
 
 - Pulls commits from one or more GitHub repositories for a chosen week, month, or custom date range.
