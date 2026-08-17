@@ -162,11 +162,12 @@ describe("summary and invoice rendering", () => {
     expect(html).toContain("Wire transfer");
   });
 
-  it("renders a client notes section only when notes are present", () => {
+  it("renders work details inside the work completed section", () => {
     const base: InvoiceDraft = { provider: { businessName: "Gitvoice", providerName: "Jane Doe", address: "Vancouver", email: "", website: "", taxId: "", remittance: "Wire details on file" }, client, periodStart: "2026-07-20", periodEnd: "2026-07-26", issuedAt: "2026-07-27T08:00:00Z", dueAt: "2026-07-27T08:00:00Z", subtotalCents: 400000, taxCents: 0, totalCents: 400000, pricing: { model: "flat", amountCents: 400000, description: "Flat project fee" }, summary: { title: "Phase two", overview: "A concise overview.", activitySummary: "One commit.", highlights: [], deliverables: [], nextSteps: [], timeline: [], source: "fallback" }, activity: { commits: [], repositories: [], additions: 0, deletions: 0, filesChanged: 0, contributors: [] } };
-    expect(renderInvoiceHtml({ ...base, number: "INV-2026-0002" })).not.toContain('<section class="notes-card"');
+    const withoutNotes = renderInvoiceHtml({ ...base, number: "INV-2026-0002" });
+    expect(withoutNotes).not.toContain("Work details:");
     const withNotes = renderInvoiceHtml({ ...base, number: "INV-2026-0002", summary: { ...base.summary, notes: "Thanks for your business!\nUse the invoice number as the reference." } });
-    expect(withNotes).toContain('<section class="notes-card"');
+    expect(withNotes).toContain("Work details:");
     expect(withNotes).toContain("Thanks for your business!");
     expect(withNotes).toContain("Use the invoice number as the reference.");
   });
