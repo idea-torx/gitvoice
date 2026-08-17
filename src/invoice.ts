@@ -1,5 +1,7 @@
 import type { InvoiceDraft, InvoiceRecord } from "./types";
 
+const DEFAULT_LOGO_DATA_URI = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiIgZmlsbD0ibm9uZSIgcm9sZT0iaW1nIiBhcmlhLWxhYmVsPSJHaXR2b2ljZSI+CiAgPGRlZnM+CiAgICA8bGluZWFyR3JhZGllbnQgaWQ9InMiIHgxPSI1IiB5MT0iNCIgeDI9IjI3IiB5Mj0iMjkiIGdyYWRpZW50VW5pdHM9InVzZXJTcGFjZU9uVXNlIj4KICAgICAgPHN0b3Agc3RvcC1jb2xvcj0iIzYwQTVGQSIvPgogICAgICA8c3RvcCBvZmZzZXQ9IjAuNTUiIHN0b3AtY29sb3I9IiMzQjgyRjYiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMjJEM0VFIi8+CiAgICA8L2xpbmVhckdyYWRpZW50PgogICAgPGxpbmVhckdyYWRpZW50IGlkPSJuIiB4MT0iMTEiIHkxPSIxMiIgeDI9IjIyIiB5Mj0iMjMiIGdyYWRpZW50VW5pdHM9InVzZXJTcGFjZU9uVXNlIj4KICAgICAgPHN0b3Agc3RvcC1jb2xvcj0iIzkzQzVGRCIvPgogICAgICA8c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiMyMkQzRUUiLz4KICAgIDwvbGluZWFyR3JhZGllbnQ+CiAgPC9kZWZzPgogIDxyZWN0IHdpZHRoPSIzMiIgaGVpZ2h0PSIzMiIgcng9IjciIGZpbGw9IiMwNTA4MTAiLz4KICA8cGF0aCBkPSJNNy42IDEzLjIgOC45IDguM2w0LjQgMi4zYTEzIDEzIDAgMCAxIDUuNCAwbDQuNC0yLjMgMS4zIDQuOWMxLjIgNi4zLTIuMSAxMy40LTguNCAxMy40UzYuNCAxOS41IDcuNiAxMy4yWiIgc3Ryb2tlPSJ1cmwoI3MpIiBzdHJva2Utd2lkdGg9IjIuNCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+CiAgPHBhdGggZD0iTTEyLjQgMTMuNXY0YTMuMSAzLjEgMCAwIDAgMy4xIDMuMWgyLjUiIHN0cm9rZT0idXJsKCNzKSIgc3Ryb2tlLXdpZHRoPSIyLjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPgogIDxjaXJjbGUgY3g9IjEyLjQiIGN5PSIxMy41IiByPSIyLjEiIGZpbGw9InVybCgjbikiLz4KICA8Y2lyY2xlIGN4PSIyMC4xIiBjeT0iMjAuNiIgcj0iMi4xIiBmaWxsPSJ1cmwoI24pIi8+Cjwvc3ZnPgo=";
+
 const PAPER_CSS = `
 @page { size: A4; margin: 0; }
 * { box-sizing: border-box; }
@@ -101,7 +103,7 @@ function renderCoverPage(invoice: InvoiceDraft | InvoiceRecord): string {
   const deliverables = summary.deliverables.slice(0, 4);
   const sourceNote = summary.source === "openai" ? "AI-assisted summary grounded in GitHub activity" : "Generated from verified GitHub commit activity";
   const invoiceNumber = invoice.number || "DRAFT";
-  const logoSrc = invoice.provider.logoUrl || "/logo.svg";
+  const logoSrc = invoice.provider.logoUrl || DEFAULT_LOGO_DATA_URI;
   const logoAlt = invoice.provider.businessName || "Gitvoice";
   const issuedDate = formatDate(invoice.issuedAt, { month: "short", day: "numeric", year: "numeric" });
   const dueDate = formatDate(invoice.dueAt, { month: "short", day: "numeric", year: "numeric" });
