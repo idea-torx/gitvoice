@@ -54,10 +54,10 @@ def keychain_secret():
 
 
 # Cloudflare's bot rules 403 the default Python-urllib user-agent (error 1010).
-USER_AGENT = "gitvoice-agent/0.1"
+USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/139 Safari/537.36"
 
 
-def request(base, path, method="GET", token=None, payload=None, timeout=30):
+def request(base, path, method="GET", token=None, payload=None, timeout=120):
     url = base.rstrip("/") + path
     headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
     if token:
