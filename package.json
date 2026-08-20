@@ -1,14 +1,43 @@
 {
   "name": "gitvoice",
   "version": "0.1.0",
-  "description": "Gitvoice — turn client GitHub activity into clear, multi-page invoices on Cloudflare Workers, with a password-protected client portal.",
+  "description": "Turn client GitHub activity into clear, polished invoices — Cloudflare Worker + D1/R2 + Workers AI, with a private admin workspace and password-protected client portal. Open source. Agent-ready.",
+  "keywords": [
+    "cloudflare-workers",
+    "cloudflare-d1",
+    "cloudflare-r2",
+    "workers-ai",
+    "invoicing",
+    "freelance",
+    "github-api",
+    "pdf-generation",
+    "saas",
+    "typescript",
+    "invoices",
+    "automation"
+  ],
+  "homepage": "https://gitvoice.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/idea-torx/gitvoice.git"
+  },
+  "bugs": {
+    "url": "https://github.com/idea-torx/gitvoice/issues"
+  },
+  "author": "idea-torx",
+  "license": "MIT",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "node scripts/ensure-dev-vars.mjs && wrangler dev --var APP_ORIGIN:http://localhost:8787",
     "dev:local": "node scripts/ensure-dev-vars.mjs && wrangler dev --config wrangler.local.jsonc --var APP_ORIGIN:http://localhost:8787",
+    "deploy": "wrangler deploy",
     "deploy:prod": "wrangler d1 migrations apply invoicer-pro --config wrangler.local.jsonc --remote && wrangler deploy --config wrangler.local.jsonc",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:watch": "vitest",
     "build": "tsc --noEmit false --outDir dist",
     "render:sample": "npm run build && node scripts/render-sample.mjs"
   },

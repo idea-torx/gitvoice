@@ -1,0 +1,26 @@
+name: Bug report
+description: Something broke in Gitvoice
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      placeholder: Steps, expected vs actual, browser/worker log tail if relevant.
+    validations: { required: true }
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      placeholder: Minimal steps and billing period / client config (redact secrets).
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      placeholder: e.g. main @ 01e9404 or 0.1.0
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submit
+      options:
+        - label: I ran `npm run typecheck && npm test` where applicable
