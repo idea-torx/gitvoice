@@ -36,7 +36,7 @@
         sync();
       })();
     </script>
-  </head>
+  <!-- rev 1787283294.884128 --></head>
   <body>
     <div id="authGate" class="auth-screen">
       <div class="auth-glow" aria-hidden="true"></div>
@@ -87,7 +87,7 @@
           <strong id="statTotal">$0</strong>
         </article>
         <article class="summary-item"><span>Last refreshed</span><strong id="statSync">—</strong></article>
-        <article class="summary-item" style="min-width:220px"><span>Revenue (6 mo)</span><div id="revenueSparkline" style="height:36px;display:flex;align-items:end;gap:3px;margin-top:6px"></div><small id="revenueLabel" class="muted" style="font-size:11px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></small></article>
+        <button id="revenueButton" class="summary-item revenue-button" style="min-width:220px" aria-haspopup="dialog" aria-label="View revenue details"><span>Revenue (6 mo)</span><div id="revenueSparkline" style="height:36px;display:flex;align-items:end;gap:3px;margin-top:6px"></div><small id="revenueLabel" class="muted" style="font-size:11px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></small><span class="revenue-hint">View chart <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12V7M8 12V4M13 12V9"/><path d="M2 12h12"/></svg></span></button>
       </section>
 
       <div class="workspace-grid">
