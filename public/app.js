@@ -666,14 +666,26 @@ function renderInvoices() {
 function renderSparkline(){
   const el=document.getElementById("revenueSparkline"); const label=document.getElementById("revenueLabel");
   if(!el) return;
-  const invoices=[...state.invoices].filter(i=>i.status!=="void").sort((a,b)=> new Date(a.issuedAt).getTime() - new Date(b.issuedAt).getTime());
+  const invoices=[...state.invoices].filter(i=>i.status!=="void");
   if(!invoices.length){ el.innerHTML='<span class="muted" style="font-size:11px">No revenue yet</span>'; if(label) label.textContent=""; return; }
-  const months=[]; const now=new Date(); for(let i=5;i>=0;i--){ const d=new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth()-i, 1)); months.push({key:`${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}`, total:0}); }
+  const sorted=[...invoices].sort((a,b)=> new Date(a.issuedAt).getTime() - new Date(b.issuedAt).getTime());
+  const now=new Date(); const months=[];
+  for(let i=5;i>=0;i--){ const d=new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth()-i, 1)); months.push({key:`${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}`, label: d.toLocaleDateString('en-US',{month:'short'}), total:0}); }
   const map=new Map(months.map(m=>[m.key,m]));
-  for(const inv of invoices){ const k=inv.issuedAt.slice(0,7); const m=map.get(k); if(m) m.total+=inv.totalCents; }
+  for(const inv of invoices){ const k=(inv.issuedAt||"").slice(0,7); const m=map.get(k); if(m) m.total+=Number(inv.totalCents||0); }
   const max=Math.max(...months.map(m=>m.total),1);
-  el.innerHTML=months.map(m=> `<div title="${m.key}: ${formatMoney(m.total, invoices[0]?.currency||"USD")}" style="flex:1; background:${m.total? "var(--blue, #0071e3)":"var(--line)"}; height:${Math.round((m.total/max)*28)+4}px; border-radius:999px; min-width:4px"></div>`).join("");
-  if(label) label.textContent= months.map(m=> formatMoney(m.total, invoices[0]?.currency||"USD")).join(" · ");
+  const cur=invoices[0]?.currency||"USD";
+  el.innerHTML=months.map(m=> {
+    const h = Math.max(6, Math.round((m.total/max)*28));
+    const bg = m.total ? "linear-gradient(180deg, #3b82f6, #1d4ed8)" : "rgba(255,255,255,0.08)";
+    return `<div style="flex:1; display:flex; flex-direction:column; align-items:center; gap:4px; min-width:0">
+      <div title="${m.key}: ${formatMoney(m.total, cur)}" style="width:100%; height:${h}px; background:${bg}; border-radius:999px; min-height:6px; border:1px solid ${m.total? "rgba(59,130,246,0.3)":"rgba(255,255,255,0.06)"}"></div>
+      <span style="font-size:10px; color:var(--muted); line-height:1">${m.label}</span>
+    </div>`;
+  }).join("");
+  const total6 = months.reduce((s,m)=> s+m.total,0);
+  const last = months[5]?.total||0;
+  if(label){ label.textContent = total6 ? `6 mo: ${formatMoney(total6, cur)} · last: ${formatMoney(last, cur)}` : ""; label.style.whiteSpace="nowrap"; label.style.overflow="hidden"; label.style.textOverflow="ellipsis"; }
 }
 function notifyInvoice(id, button){
   if(!id) return;

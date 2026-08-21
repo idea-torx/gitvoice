@@ -87,7 +87,7 @@
           <strong id="statTotal">$0</strong>
         </article>
         <article class="summary-item"><span>Last refreshed</span><strong id="statSync">—</strong></article>
-        <article class="summary-item" style="min-width:220px"><span>Revenue (6 mo)</span><div id="revenueSparkline" style="height:32px;display:flex;align-items:end;gap:2px;margin-top:6px"></div><small id="revenueLabel" class="muted" style="font-size:11px"></small></article>
+        <article class="summary-item" style="min-width:220px"><span>Revenue (6 mo)</span><div id="revenueSparkline" style="height:36px;display:flex;align-items:end;gap:3px;margin-top:6px"></div><small id="revenueLabel" class="muted" style="font-size:11px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></small></article>
       </section>
 
       <div class="workspace-grid">
@@ -147,8 +147,8 @@
         <section class="panel clients-panel">
           <div class="panel-heading">
             <div><h2>Clients</h2><p>Billing models, repositories, and portal access.</p></div>
-            <div style="display:flex;gap:8px;align-items:center"><input id="clientSearch" placeholder="Search clients…" style="border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:13px;width:160px" /></div>
-            <div class="panel-actions" style="display:flex;gap:8px;align-items:center">
+            <div class="panel-actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <input id="clientSearch" placeholder="Search clients…" style="border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:13px;width:150px;flex:1;min-width:120px;max-width:180px" />
               <button id="bulkButton" class="button button-secondary" type="button">Bulk import</button>
               <button id="discoverButton" class="button button-secondary" type="button">Discover</button>
               <span id="clientCount" class="count-badge"></span>
@@ -163,10 +163,10 @@
       </div>
 
       <section class="panel invoices-panel">
-        <div class="panel-heading">
+        <div class="panel-heading" style="flex-wrap:wrap;gap:12px">
           <div><h2>Recent invoices</h2><p>Generated documents — void, reissue, edit, versions.</p></div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <input id="invoiceSearch" placeholder="Search invoices…" style="border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:13px;width:160px" />
+            <input id="invoiceSearch" placeholder="Search invoices…" style="border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:13px;width:150px" />
             <select id="invoiceStatusFilter" style="border:1px solid var(--line);border-radius:999px;padding:6px 10px;font-size:13px"><option value="">All status</option><option value="generated">Generated</option><option value="paid">Paid</option><option value="void">Void</option><option value="disputed">Disputed</option></select>
           </div>
           <span id="archiveCount" class="count-badge">0 invoices</span>
