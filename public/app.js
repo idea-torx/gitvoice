@@ -54,6 +54,9 @@ function bindEvents() {
   if($("#invoiceEditForm")) $("#invoiceEditForm").addEventListener("submit", submitInvoiceEdit);
   if($("#operatorForm")) $("#operatorForm").addEventListener("submit", createOperatorSubmit);
   if($("#newOperatorButton")) $("#newOperatorButton").addEventListener("click", () => { $("#operatorModal").classList.remove("hidden"); $("#operatorName").focus(); });
+  if($("#clientSearch")) $("#clientSearch").addEventListener("input", renderClients);
+  if($("#invoiceSearch")) $("#invoiceSearch").addEventListener("input", renderInvoices);
+  if($("#invoiceStatusFilter")) $("#invoiceStatusFilter").addEventListener("change", renderInvoices);
   if($("#changePasswordButton")) $("#changePasswordButton").addEventListener("click", openChangePasswordModal);
   if($("#changePasswordForm")) $("#changePasswordForm").addEventListener("submit", changePassword);
   if($("#changePasswordDoneButton")) $("#changePasswordDoneButton").addEventListener("click", () => { closeModal("changePasswordModal"); });
@@ -614,27 +617,40 @@ function providerPayload() {
 
 function renderClients() {
   const root = $("#clientList");
-  $("#clientCount").textContent = `${state.clients.length} client${state.clients.length === 1 ? "" : "s"}`;
-  if (!state.clients.length) {
-    root.innerHTML = `<div class="empty-state"><span>+</span><p>Add your first client to start.</p></div>`;
+  const q = ($("#clientSearch")?.value || "").trim().toLowerCase();
+  const filtered = q ? state.clients.filter(c => `${c.name} ${c.email} ${c.githubRepos.join(" ")} ${c.billingModel}`.toLowerCase().includes(q)) : state.clients;
+  $("#clientCount").textContent = `${filtered.length} client${filtered.length === 1 ? "" : "s"}${q?` / ${state.clients.length}`:""}`;
+  if (!filtered.length) {
+    root.innerHTML = q ? `<div class="empty-state"><span>∅</span><p>No clients match “${esc(q)}”.</p></div>` : `<div class="empty-state"><span>+</span><p>Add your first client to start.</p></div>`;
     return;
   }
-  root.innerHTML = state.clients.map((client) => `<article class="client-row"><div><p class="client-name">${esc(client.name)}</p><div class="client-meta"><span><i class="cadence-dot ${client.cadence === "manual" ? "manual" : ""}"></i>${esc(client.cadence)}</span><span>${client.githubRepos.length} repo${client.githubRepos.length === 1 ? "" : "s"}</span><span>${esc(client.billingModel === "hourly" ? "Hourly" : "Flat fee")}</span><span>${esc(paymentMethodLabel(client.paymentMethod))}</span><span>${client.portalPasswordSet ? "Portal ready" : "Portal password needed"}</span></div></div><div class="client-actions"><button data-edit-client="${esc(client.id)}">Edit</button><button data-delete-client="${esc(client.id)}">Remove</button></div></article>`).join("");
+  const _origClients = state.clients; state.clients = filtered;
+  root.innerHTML = filtered.map((client) => `<article class="client-row"><div><p class="client-name">${esc(client.name)}</p><div class="client-meta"><span><i class="cadence-dot ${client.cadence === "manual" ? "manual" : ""}"></i>${esc(client.cadence)}</span><span>${client.githubRepos.length} repo${client.githubRepos.length === 1 ? "" : "s"}</span><span>${esc(client.billingModel === "hourly" ? "Hourly" : "Flat fee")}</span><span>${esc(paymentMethodLabel(client.paymentMethod))}</span><span>${client.portalPasswordSet ? "Portal ready" : "Portal password needed"}</span></div></div><div class="client-actions"><button data-edit-client="${esc(client.id)}">Edit</button><button data-delete-client="${esc(client.id)}">Remove</button></div></article>`).join("");
+  state.clients = _origClients;
   $$('[data-edit-client]').forEach((button) => button.addEventListener("click", () => openClientModal(state.clients.find((client) => client.id === button.dataset.editClient))));
   $$('[data-delete-client]').forEach((button) => button.addEventListener("click", () => removeClient(button.dataset.deleteClient)));
 }
 
 function renderInvoices() {
   const root = $("#invoiceList");
-  $("#archiveCount").textContent = `${state.invoices.length} invoice${state.invoices.length === 1 ? "" : "s"}`;
-  if (!state.invoices.length) {
+  const q = ($("#invoiceSearch")?.value || "").trim().toLowerCase();
+  const statusFilter = $("#invoiceStatusFilter")?.value || "";
+  let filtered = state.invoices;
+  if (q) filtered = filtered.filter(inv => `${inv.number} ${inv.client.name} ${inv.periodStart} ${inv.status}`.toLowerCase().includes(q));
+  if (statusFilter) {
+    if (statusFilter === "disputed") filtered = filtered.filter(inv => !!inv.dispute);
+    else filtered = filtered.filter(inv => inv.status === statusFilter);
+  }
+  $("#archiveCount").textContent = `${filtered.length} invoice${filtered.length === 1 ? "" : "s"}${(q||statusFilter)?` / ${state.invoices.length}`:""}`;
+  if (!filtered.length) {
+    if (q || statusFilter) { root.innerHTML = `<div class="empty-state"><span>∅</span><p>No invoices match.</p></div>`; return; }
     root.innerHTML = `<div class="empty-state"><span>⌁</span><p>Generated invoices will land here.</p></div>`;
     return;
   }
-  root.innerHTML = state.invoices.slice(0, 12).map((invoice) => {
+  root.innerHTML = filtered.slice(0, 12).map((invoice) => {
     const isVoid = invoice.status === 'void';
     const versionBadge = invoice.version && invoice.version > 1 ? `<span class="muted" style="font-size:11px">v${invoice.version}</span>` : '';
-    return `<article class="invoice-row"><div><div class="invoice-number">${esc(invoice.number)} ${versionBadge}</div><div class="invoice-client">${esc(invoice.client.name)}</div></div><div class="invoice-period">${formatDate(invoice.periodStart)} - ${formatDate(invoice.periodEnd)}</div><div><div class="invoice-total">${formatMoney(invoice.totalCents, invoice.currency)}</div><div class="invoice-status ${invoice.dispute ? "invoice-status-disputed" : (isVoid?"invoice-status-void":"")}">${isVoid ? "Void" : invoice.dispute ? "Disputed" : esc(invoice.status || "generated")}</div></div><div class="invoice-actions" style="flex-wrap:wrap;gap:6px"><button class="invoice-open" type="button" data-open-invoice="${esc(invoice.id)}">View</button><button type="button" data-edit-invoice="${esc(invoice.id)}">Edit</button><button type="button" data-versions-invoice="${esc(invoice.id)}">Versions</button>${isVoid ? `<button type="button" data-reissue-invoice="${esc(invoice.id)}">Reissue</button>` : `<button type="button" data-void-invoice="${esc(invoice.id)}">Void</button>`}<a class="invoice-download" href="/api/invoices/${encodeURIComponent(invoice.id)}/pdf?token=${encodeURIComponent(state.token)}" download>PDF ↓</a><button class="invoice-delete" type="button" data-delete-invoice="${esc(invoice.id)}" aria-label="Delete ${esc(invoice.number)}">Delete</button></div></article>`;
+    return `<article class="invoice-row"><div><div class="invoice-number">${esc(invoice.number)} ${versionBadge}</div><div class="invoice-client">${esc(invoice.client.name)}</div></div><div class="invoice-period">${formatDate(invoice.periodStart)} - ${formatDate(invoice.periodEnd)}</div><div><div class="invoice-total">${formatMoney(invoice.totalCents, invoice.currency)}</div><div class="invoice-status ${invoice.dispute ? "invoice-status-disputed" : (isVoid?"invoice-status-void":"")}">${isVoid ? "Void" : invoice.dispute ? "Disputed" : esc(invoice.status || "generated")}</div></div><div class="invoice-actions" style="flex-wrap:wrap;gap:6px"><button class="invoice-open" type="button" data-open-invoice="${esc(invoice.id)}">View</button><button type="button" data-edit-invoice="${esc(invoice.id)}">Edit</button><button type="button" data-versions-invoice="${esc(invoice.id)}">Versions</button>${isVoid ? `<button type="button" data-reissue-invoice="${esc(invoice.id)}">Reissue</button>` : `<button type="button" data-void-invoice="${esc(invoice.id)}">Void</button>`}<button type="button" data-notify-invoice="${esc(invoice.id)}" title="Email via Cloudflare Email beta">Notify</button><a class="invoice-download" href="/api/invoices/${encodeURIComponent(invoice.id)}/pdf?token=${encodeURIComponent(state.token)}" download>PDF ↓</a><button class="invoice-delete" type="button" data-delete-invoice="${esc(invoice.id)}" aria-label="Delete ${esc(invoice.number)}">Delete</button></div></article>`;
   }).join("");
   $$('[data-open-invoice]').forEach((button) => button.addEventListener("click", () => openInvoiceModal(button.dataset.openInvoice)));
   $$('[data-delete-invoice]').forEach((button) => button.addEventListener("click", () => deleteInvoice(button.dataset.deleteInvoice, button)));
@@ -642,8 +658,30 @@ function renderInvoices() {
   $$('[data-reissue-invoice]').forEach((button) => button.addEventListener("click", () => reissueInvoiceAction(button.dataset.reissueInvoice)));
   $$('[data-edit-invoice]').forEach((button) => button.addEventListener("click", () => openInvoiceEditModal(button.dataset.editInvoice)));
   $$('[data-versions-invoice]').forEach((button) => button.addEventListener("click", () => openVersionsModal(button.dataset.versionsInvoice)));
+  $$('[data-notify-invoice]').forEach((button) => button.addEventListener("click", () => notifyInvoice(button.dataset.notifyInvoice, button)));
 }
 
+
+
+function renderSparkline(){
+  const el=document.getElementById("revenueSparkline"); const label=document.getElementById("revenueLabel");
+  if(!el) return;
+  const invoices=[...state.invoices].filter(i=>i.status!=="void").sort((a,b)=> new Date(a.issuedAt).getTime() - new Date(b.issuedAt).getTime());
+  if(!invoices.length){ el.innerHTML='<span class="muted" style="font-size:11px">No revenue yet</span>'; if(label) label.textContent=""; return; }
+  const months=[]; const now=new Date(); for(let i=5;i>=0;i--){ const d=new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth()-i, 1)); months.push({key:`${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}`, total:0}); }
+  const map=new Map(months.map(m=>[m.key,m]));
+  for(const inv of invoices){ const k=inv.issuedAt.slice(0,7); const m=map.get(k); if(m) m.total+=inv.totalCents; }
+  const max=Math.max(...months.map(m=>m.total),1);
+  el.innerHTML=months.map(m=> `<div title="${m.key}: ${formatMoney(m.total, invoices[0]?.currency||"USD")}" style="flex:1; background:${m.total? "var(--blue, #0071e3)":"var(--line)"}; height:${Math.round((m.total/max)*28)+4}px; border-radius:999px; min-width:4px"></div>`).join("");
+  if(label) label.textContent= months.map(m=> formatMoney(m.total, invoices[0]?.currency||"USD")).join(" · ");
+}
+function notifyInvoice(id, button){
+  if(!id) return;
+  const inv=state.invoices.find(i=>i.id===id);
+  if(!inv?.client?.email){ toast("Client has no email — add it first"); return; }
+  if(button) setBusy(button,true,"Sending…");
+  api(`/api/invoices/${encodeURIComponent(id)}/notify`,{method:"POST"}).then(()=>{ toast(`Email sent to ${inv.client.email} via Cloudflare Email`); if(button) setBusy(button,false,"Notify"); }).catch(e=>{ toast(e.message||"Notify failed — check EMAIL binding / client email"); if(button) setBusy(button,false,"Notify"); });
+}
 
 function openBulkModal(){ $("#bulkJson").value=""; $("#bulkError").textContent=""; $("#bulkPreview").textContent=""; $("#bulkModal").classList.remove("hidden"); $("#bulkJson").focus(); }
 async function submitBulk(event){
@@ -873,6 +911,7 @@ function initPreviewEditor() {
 }
 
 function updateStats() {
+  try{ renderSparkline(); }catch{}
   $("#statClients").textContent = String(state.clients.filter((client) => client.active).length);
   const period = $("#statPeriod")?.value || "month";
   const range = statsRange(period, new Date());

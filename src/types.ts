@@ -8,6 +8,7 @@ export interface Env {
   INVOICE_PDFS: R2Bucket;
   BROWSER?: BrowserRun;
   AI?: Ai;
+  EMAIL?: { send: (message: unknown) => Promise<void> };
   ADMIN_TOKEN?: string;
   GITHUB_TOKEN?: string;
   OPENAI_API_KEY?: string;

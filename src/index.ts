@@ -1,5 +1,5 @@
 import { collectGithubActivity, emptyActivity } from "./github";
-import { renderInvoiceHtml } from "./invoice";
+import { formatMoney, renderInvoiceHtml } from "./invoice";
 import {
   bulkUpsertClients,
   createInvoiceRow,
@@ -139,6 +139,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path.startsWith("/api/invoices/") && path.endsWith("/void") && request.method === "POST") return voidInvoiceRoute(env, path.split("/")[3]);
   if (path.startsWith("/api/invoices/") && path.endsWith("/reissue") && request.method === "POST") return reissueInvoiceRoute(env, path.split("/")[3]);
   if (path.startsWith("/api/invoices/") && path.endsWith("/versions") && request.method === "GET") return invoiceVersionsRoute(env, path.split("/")[3]);
+  if (path.startsWith("/api/invoices/") && path.endsWith("/notify") && request.method === "POST") return notifyInvoiceRoute(request, env, path.split("/")[3]);
   if (path.startsWith("/api/invoices/") && path.endsWith("/summary") && request.method === "PATCH") return patchInvoiceSummary(request, env, path.split("/")[3]);
   if (path.startsWith("/api/invoices/") && !path.endsWith("/pdf") && request.method === "DELETE") return deleteInvoice(env, path.split("/").pop());
   if (path.startsWith("/api/invoices/") && request.method === "GET") return invoiceJson(env, path.split("/").pop());
@@ -435,6 +436,8 @@ async function createInvoice(request: Request, env: Env): Promise<Response> {
     pdf_key: null,
   });
   await ensurePdf(env, invoice);
+  // Fire-and-forget email via Cloudflare Email beta — does not block invoice creation on failure
+  try { const emailRes = await sendInvoiceEmail(env, invoice); if (emailRes.sent) console.log(`Invoice email sent for ${invoice.number} to ${invoice.client.email}`); else if (invoice.client.email) console.log(`Invoice email skipped: ${emailRes.reason}`); } catch (e) { console.error("notify failed", e); }
   return json({ invoice: publicInvoice(invoice) }, 201);
 }
 
@@ -619,6 +622,7 @@ async function runScheduled(time: number, env: Env): Promise<void> {
           pdf_key: null,
         });
         await ensurePdf(env, invoice);
+        try { await sendInvoiceEmail(env, invoice); } catch {}
       } catch (error) {
         console.error(`Scheduled invoice failed for ${client.id}`, error);
       }
@@ -884,6 +888,59 @@ async function stripeWebhook(request: Request, env: Env): Promise<Response> {
     if (msg.includes("already processed")) return json({ ok: true, duplicate: true });
     throw e;
   }
+}
+
+
+async function sendInvoiceEmail(env: Env, invoice: InvoiceRecord): Promise<{ sent: boolean; reason?: string }> {
+  if (!env.EMAIL) return { sent: false, reason: "EMAIL binding not configured (Cloudflare Email beta not enabled)" };
+  if (!invoice.client.email) return { sent: false, reason: "Client has no email" };
+  const from = invoice.provider.email || "noreply@gitvoice.dev";
+  const to = invoice.client.email;
+  const subject = `Invoice ${invoice.number} — ${invoice.client.name} — ${invoice.provider.businessName}`;
+  const portalUrl = `${(env.APP_ORIGIN || "https://invoicer-pro.ideatorx.workers.dev").replace(/\/$/, "")}/portal`;
+  const invoiceUrl = `${(env.APP_ORIGIN || "https://invoicer-pro.ideatorx.workers.dev").replace(/\/$/, "")}/invoice/${invoice.id}`;
+  const html = `<!doctype html><html><body style="font-family:system-ui, sans-serif; color:#1d1d1f; line-height:1.6; max-width:640px; margin:0 auto; padding:24px">
+    <h2 style="margin:0 0 8px">${invoice.provider.businessName} — Invoice ${invoice.number}</h2>
+    <p style="color:#6e6e73">Hi ${invoice.client.name},</p>
+    <p>Your invoice for <strong>${invoice.periodStart} → ${invoice.periodEnd}</strong> is ready.</p>
+    <p><strong>${invoice.summary.title}</strong><br/>${invoice.summary.overview.slice(0, 280)}</p>
+    <p>Total: <strong>${formatMoney(invoice.totalCents, invoice.currency)}</strong> · ${invoice.pricing.description}</p>
+    <p><a href="${invoiceUrl}?token=PORTAL_TOKEN_PLACEHOLDER" style="display:inline-block; background:#0071e3; color:#fff; padding:10px 18px; border-radius:999px; text-decoration:none">View invoice</a></p>
+    <p style="font-size:13px; color:#6e6e73">Client portal: <a href="${portalUrl}">${portalUrl}</a> — use your portal password. Questions? Reply to ${from}.</p>
+    <hr style="border:none; border-top:1px solid #e5e5e7; margin:18px 0"/>
+    <p style="font-size:12px; color:#86868b">${invoice.provider.providerName} · ${invoice.provider.address.replace(/\n/g, " · ")}</p>
+  </body></html>`;
+  const text = `${invoice.provider.businessName} — Invoice ${invoice.number}\nClient: ${invoice.client.name}\nPeriod: ${invoice.periodStart} → ${invoice.periodEnd}\nTotal: ${formatMoney(invoice.totalCents, invoice.currency)}\nView: ${invoiceUrl}\nPortal: ${portalUrl}`;
+  try {
+    const EmailMessageCtor = (globalThis as unknown as { EmailMessage?: new (from: string, to: string, data: string) => unknown }).EmailMessage;
+    if (!EmailMessageCtor) return { sent: false, reason: "EmailMessage not available in this runtime" };
+    const msg = new EmailMessageCtor(from, to, `From: ${from}\r\nTo: ${to}\r\nSubject: ${subject}\r\nContent-Type: text/html; charset=utf-8\r\n\r\n${html}`);
+    // Some runtimes want HTML as raw; fallback to fetch-based send if EmailMessage fails
+    await (env.EMAIL as unknown as { send: (m: unknown) => Promise<void> }).send(msg);
+    return { sent: true };
+  } catch (e) {
+    // Fallback: try raw text via EmailMessage string
+    try {
+      const msg2 = new (globalThis as unknown as { EmailMessage: new (from: string, to: string, data: string) => unknown }).EmailMessage(from, to, text);
+      await (env.EMAIL as unknown as { send: (m: unknown) => Promise<void> }).send(msg2);
+      return { sent: true };
+    } catch (e2) {
+      console.error("Email send failed", e2);
+      return { sent: false, reason: e2 instanceof Error ? e2.message : String(e2) };
+    }
+  }
+}
+
+async function notifyInvoiceRoute(request: Request, env: Env, id?: string): Promise<Response> {
+  if (!id) throw new Error("Invoice id is required");
+  const row = await getInvoiceRow(env.DB, id);
+  if (!row) throw new Error("Invoice not found");
+  const client = await getClient(env.DB, row.client_id);
+  if (!client) throw new Error("Invoice client not found");
+  const invoice = rowToInvoice(row, client, await getProvider(env.DB));
+  const result = await sendInvoiceEmail(env, invoice);
+  if (!result.sent) return json({ sent: false, reason: result.reason }, 503);
+  return json({ sent: true, to: client.email, invoice: invoice.number });
 }
 
 async function listOperatorRoute(env: Env): Promise<Response> {
