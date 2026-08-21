@@ -54,9 +54,11 @@ function bindEvents() {
   if($("#invoiceEditForm")) $("#invoiceEditForm").addEventListener("submit", submitInvoiceEdit);
   if($("#operatorForm")) $("#operatorForm").addEventListener("submit", createOperatorSubmit);
   if($("#newOperatorButton")) $("#newOperatorButton").addEventListener("click", () => { $("#operatorModal").classList.remove("hidden"); $("#operatorName").focus(); });
-  if($("#clientSearch")) $("#clientSearch").addEventListener("input", renderClients);
-  if($("#invoiceSearch")) $("#invoiceSearch").addEventListener("input", renderInvoices);
+  if($("#revenueButton")) $("#revenueButton").addEventListener("click", openRevenueModal);
+  if($("#clientSearch")) { $("#clientSearch").addEventListener("input", ()=>{ const v=$("#clientSearch").value; const c=document.querySelector("[data-clear=\"clientSearch\"]"); if(c) c.classList.toggle("hidden", !v); renderClients(); }); }
+  if($("#invoiceSearch")) { $("#invoiceSearch").addEventListener("input", ()=>{ const v=$("#invoiceSearch").value; const c=document.querySelector("[data-clear=\"invoiceSearch\"]"); if(c) c.classList.toggle("hidden", !v); renderInvoices(); }); }
   if($("#invoiceStatusFilter")) $("#invoiceStatusFilter").addEventListener("change", renderInvoices);
+  document.querySelectorAll("[data-clear]").forEach(btn=> btn.addEventListener("click", ()=>{ const id=btn.dataset.clear; const el=document.getElementById(id); if(el){ el.value=""; el.dispatchEvent(new Event("input")); btn.classList.add("hidden"); } }));
   if($("#changePasswordButton")) $("#changePasswordButton").addEventListener("click", openChangePasswordModal);
   if($("#changePasswordForm")) $("#changePasswordForm").addEventListener("submit", changePassword);
   if($("#changePasswordDoneButton")) $("#changePasswordDoneButton").addEventListener("click", () => { closeModal("changePasswordModal"); });
@@ -665,28 +667,50 @@ function renderInvoices() {
 
 function renderSparkline(){
   const el=document.getElementById("revenueSparkline"); const label=document.getElementById("revenueLabel");
-  if(!el) return;
   const invoices=[...state.invoices].filter(i=>i.status!=="void");
-  if(!invoices.length){ el.innerHTML='<span class="muted" style="font-size:11px">No revenue yet</span>'; if(label) label.textContent=""; return; }
-  const sorted=[...invoices].sort((a,b)=> new Date(a.issuedAt).getTime() - new Date(b.issuedAt).getTime());
-  const now=new Date(); const months=[];
-  for(let i=5;i>=0;i--){ const d=new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth()-i, 1)); months.push({key:`${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}`, label: d.toLocaleDateString('en-US',{month:'short'}), total:0}); }
-  const map=new Map(months.map(m=>[m.key,m]));
-  for(const inv of invoices){ const k=(inv.issuedAt||"").slice(0,7); const m=map.get(k); if(m) m.total+=Number(inv.totalCents||0); }
-  const max=Math.max(...months.map(m=>m.total),1);
-  const cur=invoices[0]?.currency||"USD";
-  el.innerHTML=months.map(m=> {
-    const h = Math.max(6, Math.round((m.total/max)*28));
-    const bg = m.total ? "linear-gradient(180deg, #3b82f6, #1d4ed8)" : "rgba(255,255,255,0.08)";
-    return `<div style="flex:1; display:flex; flex-direction:column; align-items:center; gap:4px; min-width:0">
-      <div title="${m.key}: ${formatMoney(m.total, cur)}" style="width:100%; height:${h}px; background:${bg}; border-radius:999px; min-height:6px; border:1px solid ${m.total? "rgba(59,130,246,0.3)":"rgba(255,255,255,0.06)"}"></div>
-      <span style="font-size:10px; color:var(--muted); line-height:1">${m.label}</span>
-    </div>`;
-  }).join("");
-  const total6 = months.reduce((s,m)=> s+m.total,0);
-  const last = months[5]?.total||0;
-  if(label){ label.textContent = total6 ? `6 mo: ${formatMoney(total6, cur)} · last: ${formatMoney(last, cur)}` : ""; label.style.whiteSpace="nowrap"; label.style.overflow="hidden"; label.style.textOverflow="ellipsis"; }
+  const render = (targetEl, targetLabel, isModal=false) => {
+    if(!targetEl) return;
+    if(!invoices.length){ targetEl.innerHTML='<span class="muted" style="font-size:11px">No revenue yet</span>'; if(targetLabel) targetLabel.textContent=""; return; }
+    const now=new Date(); const months=[];
+    for(let i=5;i>=0;i--){ const d=new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth()-i, 1)); months.push({key:`${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}`, label: d.toLocaleDateString('en-US',{month:'short', year: isModal?'2-digit':undefined}), total:0}); }
+    const map=new Map(months.map(m=>[m.key,m]));
+    for(const inv of invoices){ const k=(inv.issuedAt||"").slice(0,7); const m=map.get(k); if(m) m.total+=Number(inv.totalCents||0); }
+    const max=Math.max(...months.map(m=>m.total),1);
+    const cur=invoices[0]?.currency||"USD";
+    const hScale = isModal ? 100 : 28;
+    targetEl.innerHTML=months.map(m=> {
+      const h = Math.max(isModal?8:6, Math.round((m.total/max)*hScale));
+      const bg = m.total ? "linear-gradient(180deg, #3b82f6, #1d4ed8)" : "rgba(255,255,255,0.08)";
+      return `<div style="flex:1; display:flex; flex-direction:column; align-items:center; gap:${isModal?6:4}px; min-width:0">
+        <div title="${m.key}: ${formatMoney(m.total, cur)}" style="width:100%; height:${h}px; background:${bg}; border-radius:${isModal?6:999}px; min-height:${isModal?8:6}px; border:1px solid ${m.total? "rgba(59,130,246,0.3)":"rgba(255,255,255,0.06)"}"></div>
+        <span style="font-size:${isModal?12:10}px; color:var(--muted); line-height:1">${m.label}</span>
+        ${isModal?`<span style="font-size:11px; font-weight:600">${formatMoney(m.total, cur)}</span>`:""}
+      </div>`;
+    }).join("");
+    if(targetLabel && !isModal){
+      const total6 = months.reduce((s,m)=> s+m.total,0);
+      const last = months[5]?.total||0;
+      targetLabel.textContent = total6 ? `6 mo: ${formatMoney(total6, cur)} · last: ${formatMoney(last, cur)}` : "";
+      targetLabel.style.whiteSpace="nowrap"; targetLabel.style.overflow="hidden"; targetLabel.style.textOverflow="ellipsis";
+    }
+  };
+  render(el, label, false);
+  // also render modal if open
+  const modalBars=document.getElementById("revenueChartBars");
+  const modalTable=document.getElementById("revenueChartTable");
+  if(modalBars){
+    render(modalBars, null, true);
+    if(modalTable){
+      const now2=new Date(); const months2=[];
+      for(let i=5;i>=0;i--){ const d=new Date(Date.UTC(now2.getUTCFullYear(), now2.getUTCMonth()-i, 1)); months2.push({key:`${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}`, label: d.toLocaleDateString('en-US',{month:'long', year:'numeric'}), total:0}); }
+      const map2=new Map(months2.map(m=>[m.key,m]));
+      for(const inv of invoices){ const k=(inv.issuedAt||"").slice(0,7); const m=map2.get(k); if(m) m.total+=Number(inv.totalCents||0); }
+      const cur2=invoices[0]?.currency||"USD";
+      modalTable.innerHTML=months2.slice().reverse().map(m=> `<tr><td>${m.label}</td><td style="text-align:right; font-variant-numeric:tabular-nums">${formatMoney(m.total, cur2)}</td></tr>`).join("");
+    }
+  }
 }
+function openRevenueModal(){ renderSparkline(); document.getElementById("revenueModal")?.classList.remove("hidden"); }
 function notifyInvoice(id, button){
   if(!id) return;
   const inv=state.invoices.find(i=>i.id===id);

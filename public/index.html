@@ -350,6 +350,21 @@
       </form>
     </div>
 
+    <div id="revenueModal" class="modal-backdrop hidden">
+      <div class="modal-card" style="max-width:560px">
+        <div class="modal-heading"><div><p class="section-label">Revenue</p><h2>Last 6 months</h2></div><button type="button" class="close-button" data-close="revenueModal" aria-label="Close revenue">×</button></div>
+        <div class="revenue-chart">
+          <div id="revenueChartBars" class="revenue-bars"></div>
+          <table class="revenue-table">
+            <thead><tr><th>Month</th><th style="text-align:right">Total</th></tr></thead>
+            <tbody id="revenueChartTable"></tbody>
+          </table>
+          <p class="muted" style="font-size:12px;margin:0">Voided invoices excluded. Click an invoice in the list to see details.</p>
+        </div>
+        <div class="modal-actions"><button type="button" class="button button-secondary" data-close="revenueModal">Close</button></div>
+      </div>
+    </div>
+
     <div id="changePasswordModal" class="modal-backdrop hidden">
       <form id="changePasswordForm" class="modal-card">
         <div class="modal-heading"><div><p class="section-label">Workspace</p><h2>Change password</h2></div><button type="button" class="close-button" data-close="changePasswordModal" aria-label="Close change password">×</button></div>
