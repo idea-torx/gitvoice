@@ -666,58 +666,47 @@ function renderInvoices() {
 
 
 function renderSparkline(){
-  const el=document.getElementById("revenueSparkline"); const label=document.getElementById("revenueLabel");
+  const el=document.getElementById("revenueSparkline");
+  const label=document.getElementById("revenueLabel");
   const invoices=[...state.invoices].filter(i=>i.status!=="void");
-  const render = (targetEl, targetLabel, isModal=false) => {
-    if(!targetEl) return;
-    if(!invoices.length){ targetEl.innerHTML='<span class="muted" style="font-size:11px">No revenue yet</span>'; if(targetLabel) targetLabel.textContent=""; return; }
-    const now=new Date(); const months=[];
-    for(let i=5;i>=0;i--){ const d=new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth()-i, 1)); months.push({key:`${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}`, label: d.toLocaleDateString('en-US',{month:'short', year: isModal?'2-digit':undefined}), total:0}); }
-    const map=new Map(months.map(m=>[m.key,m]));
-    for(const inv of invoices){ const k=(inv.issuedAt||"").slice(0,7); const m=map.get(k); if(m) m.total+=Number(inv.totalCents||0); }
-    const max=Math.max(...months.map(m=>m.total),1);
-    const cur=invoices[0]?.currency||"USD";
-    const hScale = isModal ? 100 : 28;
-    targetEl.innerHTML=months.map(m=> {
-      const h = Math.max(isModal?8:6, Math.round((m.total/max)*hScale));
-      const bg = m.total ? "linear-gradient(180deg, #3b82f6, #1d4ed8)" : "rgba(255,255,255,0.08)";
-      return `<div style="flex:1; display:flex; flex-direction:column; align-items:center; gap:${isModal?6:4}px; min-width:0">
-        <div title="${m.key}: ${formatMoney(m.total, cur)}" style="width:100%; height:${h}px; background:${bg}; border-radius:${isModal?6:999}px; min-height:${isModal?8:6}px; border:1px solid ${m.total? "rgba(59,130,246,0.3)":"rgba(255,255,255,0.06)"}"></div>
-        <span style="font-size:${isModal?12:10}px; color:var(--muted); line-height:1">${m.label}</span>
-        ${isModal?`<span style="font-size:11px; font-weight:600">${formatMoney(m.total, cur)}</span>`:""}
-      </div>`;
-    }).join("");
-    if(targetLabel && !isModal){
-      const total6 = months.reduce((s,m)=> s+m.total,0);
-      const last = months[5]?.total||0;
-      targetLabel.textContent = total6 ? `6 mo: ${formatMoney(total6, cur)} · last: ${formatMoney(last, cur)}` : "";
-      targetLabel.style.whiteSpace="nowrap"; targetLabel.style.overflow="hidden"; targetLabel.style.textOverflow="ellipsis";
-    }
-  };
-  render(el, label, false);
-  // also render modal if open
+  if(!invoices.length){
+    if(el) el.innerHTML='<span class="muted" style="font-size:11px">No revenue yet</span>';
+    if(label) label.textContent="—";
+    const mb=document.getElementById("revenueChartBars"); if(mb) mb.innerHTML='<span class="muted">No revenue yet</span>';
+    const mt=document.getElementById("revenueChartTable"); if(mt) mt.innerHTML="";
+    return;
+  }
+  const now=new Date(); const months=[];
+  for(let i=5;i>=0;i--){ const d=new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth()-i, 1)); months.push({key:`${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}`, label: d.toLocaleDateString('en-US',{month:'short', year:'2-digit'}), total:0}); }
+  // For small tag, we just need total, not full sparkline
+  const total6 = (()=>{ const m=new Map(months.map(x=>[x.key,{...x}])); for(const inv of invoices){ const k=(inv.issuedAt||"").slice(0,7); const mm=m.get(k); if(mm) mm.total+=Number(inv.totalCents||0); } return [...m.values()].reduce((s,x)=>s+x.total,0); })();
+  const cur=invoices[0]?.currency||"USD";
+  if(label){ label.textContent = total6 ? formatMoney(total6, cur) : "—"; }
+  // Render modal chart if present
   const modalBars=document.getElementById("revenueChartBars");
   const modalTable=document.getElementById("revenueChartTable");
   if(modalBars){
-    render(modalBars, null, true);
+    const map=new Map(months.map(m=>[m.key,{...m, total:0}]));
+    // recompute with actual totals
+    for(const inv of invoices){ const k=(inv.issuedAt||"").slice(0,7); const mm=map.get(k); if(mm) mm.total+=Number(inv.totalCents||0); }
+    const max=Math.max(...[...map.values()].map(m=>m.total),1);
+    modalBars.innerHTML=[...map.values()].map(m=> {
+      const h = Math.max(8, Math.round((m.total/max)*100));
+      const bg = m.total ? "linear-gradient(180deg, #3b82f6, #1d4ed8)" : "rgba(255,255,255,0.08)";
+      return `<div style="flex:1; display:flex; flex-direction:column; align-items:center; gap:6px; min-width:0">
+        <div title="${m.key}: ${formatMoney(m.total, cur)}" style="width:100%; height:${h}px; background:${bg}; border-radius:6px; min-height:8px; border:1px solid ${m.total? "rgba(59,130,246,0.3)":"rgba(255,255,255,0.06)"}"></div>
+        <span style="font-size:11px; color:var(--muted)">${m.label}</span>
+        <span style="font-size:11px; font-weight:600">${formatMoney(m.total, cur)}</span>
+      </div>`;
+    }).join("");
     if(modalTable){
-      const now2=new Date(); const months2=[];
-      for(let i=5;i>=0;i--){ const d=new Date(Date.UTC(now2.getUTCFullYear(), now2.getUTCMonth()-i, 1)); months2.push({key:`${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}`, label: d.toLocaleDateString('en-US',{month:'long', year:'numeric'}), total:0}); }
-      const map2=new Map(months2.map(m=>[m.key,m]));
-      for(const inv of invoices){ const k=(inv.issuedAt||"").slice(0,7); const m=map2.get(k); if(m) m.total+=Number(inv.totalCents||0); }
-      const cur2=invoices[0]?.currency||"USD";
-      modalTable.innerHTML=months2.slice().reverse().map(m=> `<tr><td>${m.label}</td><td style="text-align:right; font-variant-numeric:tabular-nums">${formatMoney(m.total, cur2)}</td></tr>`).join("");
+      const revMonths=[...map.values()].slice().reverse();
+      modalTable.innerHTML=revMonths.map(m=> `<tr><td>${m.label}</td><td style="text-align:right; font-variant-numeric:tabular-nums">${formatMoney(m.total, cur)}</td></tr>`).join("");
     }
   }
+  // Small sparkline no longer in DOM, so nothing to render there
 }
 function openRevenueModal(){ renderSparkline(); document.getElementById("revenueModal")?.classList.remove("hidden"); }
-function notifyInvoice(id, button){
-  if(!id) return;
-  const inv=state.invoices.find(i=>i.id===id);
-  if(!inv?.client?.email){ toast("Client has no email — add it first"); return; }
-  if(button) setBusy(button,true,"Sending…");
-  api(`/api/invoices/${encodeURIComponent(id)}/notify`,{method:"POST"}).then(()=>{ toast(`Email sent to ${inv.client.email} via Cloudflare Email`); if(button) setBusy(button,false,"Notify"); }).catch(e=>{ toast(e.message||"Notify failed — check EMAIL binding / client email"); if(button) setBusy(button,false,"Notify"); });
-}
 
 function openBulkModal(){ $("#bulkJson").value=""; $("#bulkError").textContent=""; $("#bulkPreview").textContent=""; $("#bulkModal").classList.remove("hidden"); $("#bulkJson").focus(); }
 async function submitBulk(event){
