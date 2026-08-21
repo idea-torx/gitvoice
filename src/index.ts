@@ -1,6 +1,5 @@
 import { collectGithubActivity, emptyActivity } from "./github";
 import { formatMoney, renderInvoiceHtml } from "./invoice";
-import { EmailMessage } from "cloudflare:email";
 import {
   bulkUpsertClients,
   createInvoiceRow,
@@ -912,15 +911,24 @@ async function sendInvoiceEmail(env: Env, invoice: InvoiceRecord): Promise<{ sen
     <p style="font-size:12px; color:#86868b">${invoice.provider.providerName} · ${invoice.provider.address.replace(/\n/g, " · ")}</p>
   </body></html>`;
   const text = `${invoice.provider.businessName} — Invoice ${invoice.number}\nClient: ${invoice.client.name}\nPeriod: ${invoice.periodStart} → ${invoice.periodEnd}\nTotal: ${formatMoney(invoice.totalCents, invoice.currency)}\nView: ${invoiceUrl}\nPortal: ${portalUrl}`;
+  // Cloudflare Email beta: EmailMessage lives in "cloudflare:email" in Workers, not in Node/vitest
+  let EmailMessageCtor: new (from: string, to: string, data: string) => unknown;
   try {
-    const msg = new EmailMessage(from, to, `From: ${from}\r\nTo: ${to}\r\nSubject: ${subject}\r\nContent-Type: text/html; charset=utf-8\r\n\r\n${html}`);
+    const mod: unknown = await import("cloudflare:email");
+    EmailMessageCtor = (mod as { EmailMessage: new (from: string, to: string, data: string) => unknown }).EmailMessage;
+  } catch {
+    const g = globalThis as unknown as { EmailMessage?: new (from: string, to: string, data: string) => unknown };
+    if (g.EmailMessage) EmailMessageCtor = g.EmailMessage;
+    else return { sent: false, reason: "EmailMessage not available in this runtime" };
+  }
+  try {
+    const msg = new EmailMessageCtor(from, to, `From: ${from}\r\nTo: ${to}\r\nSubject: ${subject}\r\nContent-Type: text/html; charset=utf-8\r\n\r\n${html}`);
     await (env.EMAIL as unknown as { send: (m: unknown) => Promise<void> }).send(msg);
     return { sent: true };
   } catch (e) {
     console.error("Email send failed", e);
-    // Try text fallback via same EmailMessage
     try {
-      const msg2 = new EmailMessage(from, to, text);
+      const msg2 = new EmailMessageCtor(from, to, text);
       await (env.EMAIL as unknown as { send: (m: unknown) => Promise<void> }).send(msg2);
       return { sent: true };
     } catch (e2) {
