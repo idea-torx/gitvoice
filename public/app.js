@@ -681,29 +681,53 @@ function renderSparkline(){
   const now=new Date(); const months=[];
   for(let i=5;i>=0;i--){ const d=new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth()-i, 1)); months.push({key:`${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}`, label: d.toLocaleDateString('en-US',{month:'short', year:'2-digit'}), total:0}); }
   // For small tag, we just need total, not full sparkline
-  const total6 = (()=>{ const m=new Map(months.map(x=>[x.key,{...x}])); for(const inv of invoices){ const k=(inv.issuedAt||"").slice(0,7); const mm=m.get(k); if(mm) mm.total+=Number(inv.totalCents||0); } return [...m.values()].reduce((s,x)=>s+x.total,0); })();
-  const cur=invoices[0]?.currency||"USD";
-  if(label){ label.textContent = total6 ? formatMoney(total6, cur) : "—"; }
+  // Multi-currency aware totals
+  const byCur = new Map();
+  for(const inv of invoices){ byCur.set(inv.currency, (byCur.get(inv.currency)||0)+Number(inv.totalCents||0)); }
+  const primaryCur = [...byCur.entries()].sort((a,b)=> b[1]-a[1])[0]?.[0] || "CAD";
+  const total6 = (()=>{ const m=new Map(months.map(x=>[x.key,{...x}])); for(const inv of invoices){ if(inv.currency!==primaryCur) continue; const k=(inv.issuedAt||"").slice(0,7); const mm=m.get(k); if(mm) mm.total+=Number(inv.totalCents||0); } return [...m.values()].reduce((s,x)=>s+x.total,0); })();
+  if(label){
+    if(byCur.size>1){
+      const parts=[...byCur.entries()].sort((a,b)=>b[1]-a[1]).map(([cur, tot])=> formatMoney(tot, cur)).join(" + ");
+      label.textContent = parts;
+      label.title = `Primary ${primaryCur} 6mo: ${formatMoney(total6, primaryCur)}`;
+    } else {
+      label.textContent = total6 ? formatMoney(total6, primaryCur) : "—";
+    }
+  }
   // Render modal chart if present
   const modalBars=document.getElementById("revenueChartBars");
   const modalTable=document.getElementById("revenueChartTable");
   if(modalBars){
-    const map=new Map(months.map(m=>[m.key,{...m, total:0}]));
-    // recompute with actual totals
-    for(const inv of invoices){ const k=(inv.issuedAt||"").slice(0,7); const mm=map.get(k); if(mm) mm.total+=Number(inv.totalCents||0); }
+    // Build per-currency maps for modal
+    const curTotals = new Map();
+    for(const inv of invoices){ curTotals.set(inv.currency, (curTotals.get(inv.currency)||0)+Number(inv.totalCents||0)); }
+    const primary = [...curTotals.entries()].sort((a,b)=> b[1]-a[1])[0]?.[0] || primaryCur;
+    const map=new Map(months.map(m=>[m.key,{...m, total:0, byCur: new Map()}]));
+    for(const inv of invoices){ const k=(inv.issuedAt||"").slice(0,7); const mm=map.get(k); if(mm){ mm.total+=Number(inv.totalCents||0); mm.byCur.set(inv.currency, (mm.byCur.get(inv.currency)||0)+Number(inv.totalCents||0)); } }
     const max=Math.max(...[...map.values()].map(m=>m.total),1);
     modalBars.innerHTML=[...map.values()].map(m=> {
       const h = Math.max(8, Math.round((m.total/max)*100));
       const bg = m.total ? "linear-gradient(180deg, #3b82f6, #1d4ed8)" : "rgba(255,255,255,0.08)";
+      const tooltip = [...m.byCur.entries()].map(([c,tot])=> `${c} ${formatMoney(tot,c)}`).join(" + ") || formatMoney(0, primary);
       return `<div style="flex:1; display:flex; flex-direction:column; align-items:center; gap:6px; min-width:0">
-        <div title="${m.key}: ${formatMoney(m.total, cur)}" style="width:100%; height:${h}px; background:${bg}; border-radius:6px; min-height:8px; border:1px solid ${m.total? "rgba(59,130,246,0.3)":"rgba(255,255,255,0.06)"}"></div>
+        <div title="${m.key}: ${tooltip}" style="width:100%; height:${h}px; background:${bg}; border-radius:6px; min-height:8px; border:1px solid ${m.total? "rgba(59,130,246,0.3)":"rgba(255,255,255,0.06)"}"></div>
         <span style="font-size:11px; color:var(--muted)">${m.label}</span>
-        <span style="font-size:11px; font-weight:600">${formatMoney(m.total, cur)}</span>
+        <span style="font-size:11px; font-weight:600; white-space:nowrap">${m.total ? [...m.byCur.entries()].map(([c,tot])=> formatMoney(tot,c)).join(" + ") : formatMoney(0, primary)}</span>
       </div>`;
     }).join("");
     if(modalTable){
       const revMonths=[...map.values()].slice().reverse();
-      modalTable.innerHTML=revMonths.map(m=> `<tr><td>${m.label}</td><td style="text-align:right; font-variant-numeric:tabular-nums">${formatMoney(m.total, cur)}</td></tr>`).join("");
+      // Header per currency if multi
+      if(curTotals.size>1){
+        const curList=[...curTotals.keys()].sort();
+        // Update table header to show per-currency columns
+        const thead = modalTable.closest("table")?.querySelector("thead");
+        if(thead) thead.innerHTML=`<tr><th>Month</th>${curList.map(c=>`<th style="text-align:right">${c}</th>`).join("")}<th style="text-align:right">Total</th></tr>`;
+        modalTable.innerHTML=revMonths.map(m=> `<tr><td>${m.label}</td>${curList.map(c=> `<td style="text-align:right; font-variant-numeric:tabular-nums">${m.byCur.get(c)? formatMoney(m.byCur.get(c)||0,c) : "—"}</td>`).join("")}<td style="text-align:right; font-weight:600; font-variant-numeric:tabular-nums">${formatMoney(m.total, primary)}</td></tr>`).join("");
+      } else {
+        modalTable.innerHTML=revMonths.map(m=> `<tr><td>${m.label}</td><td style="text-align:right; font-variant-numeric:tabular-nums">${formatMoney(m.total, primary)}</td></tr>`).join("");
+      }
     }
   }
   // Small sparkline no longer in DOM, so nothing to render there
