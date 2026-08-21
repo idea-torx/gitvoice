@@ -231,8 +231,8 @@ describe("invoice persistence", () => {
       pdf_key: null,
     });
 
-    expect(preparedSql.match(/\?/g) || []).toHaveLength(17);
-    expect(boundValues).toHaveLength(17);
+    expect(preparedSql.match(/\?/g) || []).toHaveLength(18);
+    expect(boundValues).toHaveLength(18);
   });
 });
 

@@ -14,6 +14,13 @@ export interface Env {
   OPENAI_MODEL?: string;
   APP_ORIGIN?: string;
   PORTAL_SECRET?: string;
+  STRIPE_WEBHOOK_SECRET?: string;
+}
+
+export interface ProviderTheme {
+  accentColor?: string;
+  fontFamily?: string;
+  headerStyle?: "classic" | "modern" | "minimal";
 }
 
 export interface ProviderProfile {
@@ -25,6 +32,7 @@ export interface ProviderProfile {
   taxId: string;
   remittance: string;
   logoUrl?: string;
+  theme?: ProviderTheme;
 }
 
 export interface AdminState {
@@ -34,6 +42,15 @@ export interface AdminState {
   recoveryHash: string;
   recoverySalt: string;
   setupAt: string;
+}
+
+export interface Operator {
+  id: string;
+  name: string;
+  role: "admin" | "operator";
+  tokenHash: string;
+  tokenSalt: string;
+  createdAt?: string;
 }
 
 export interface Client {
@@ -49,6 +66,7 @@ export interface Client {
   billingDay: number;
   billingModel: BillingModel;
   defaultRateCents: number;
+  defaultHours?: number;
   currency: string;
   paymentMethod: PaymentMethod;
   paymentTerms: string;
@@ -113,6 +131,34 @@ export interface Summary {
   source: "openai" | "fallback";
 }
 
+export interface SummaryOverride {
+  title?: string;
+  overview?: string;
+  highlights?: string[];
+  deliverables?: string[];
+  nextSteps?: string[];
+  timeline?: TimelineEntry[];
+}
+
+export interface TimeEntry {
+  id: string;
+  clientId: string;
+  date: string;
+  hours: number;
+  description: string;
+  source?: string;
+}
+
+export interface InvoiceVersion {
+  id: string;
+  invoiceId: string;
+  version: number;
+  status: InvoiceRecord["status"];
+  summaryJson: string;
+  pricingJson: string;
+  createdAt: string;
+}
+
 export interface InvoiceDraft {
   id?: string;
   number?: string;
@@ -139,6 +185,7 @@ export interface InvoiceRecord extends InvoiceDraft {
   manualDescription?: string;
   pdfKey?: string | null;
   createdAt?: string;
+  version?: number;
 }
 
 export interface ClientInput {
@@ -156,6 +203,7 @@ export interface ClientInput {
   defaultRateCents?: number;
   /** @deprecated Use defaultRateCents. Kept so older clients can still be edited. */
   flatAmountCents?: number;
+  defaultHours?: number;
   currency: string;
   paymentMethod: PaymentMethod;
   paymentTerms: string;
@@ -210,6 +258,7 @@ export interface D1ClientRow {
   active: number;
   created_at?: string;
   updated_at?: string;
+  default_hours?: number | null;
 }
 
 export interface D1InvoiceRow {
@@ -231,6 +280,7 @@ export interface D1InvoiceRow {
   manual_description?: string | null;
   pdf_key?: string | null;
   created_at?: string;
+  version?: number;
 }
 
 export interface InvoiceDispute {
@@ -246,5 +296,34 @@ export interface D1InvoiceDisputeRow {
   invoice_id: string;
   client_id: string;
   reason: string;
+  created_at: string;
+}
+
+export interface D1InvoiceVersionRow {
+  id: string;
+  invoice_id: string;
+  version: number;
+  status: string;
+  summary_json: string;
+  pricing_json: string;
+  created_at: string;
+}
+
+export interface D1OperatorRow {
+  id: string;
+  name: string;
+  role: string;
+  token_hash: string;
+  token_salt: string;
+  created_at: string;
+}
+
+export interface D1TimeEntryRow {
+  id: string;
+  client_id: string;
+  date: string;
+  hours: number;
+  description: string;
+  source: string;
   created_at: string;
 }

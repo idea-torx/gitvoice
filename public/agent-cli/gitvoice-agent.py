@@ -470,6 +470,65 @@ def cmd_portal_invoices(args):
               f"{inv.get('currency','')} {inv.get('totalCents',0)/100:>10.2f}  {inv.get('status','')}  {inv.get('id','')}")
 
 
+
+
+def cmd_watch(args):
+    """Poll list and backup every --interval seconds."""
+    token = require_auth(args.base)
+    interval = int(getattr(args, "interval", 60) or 60)
+    out = getattr(args, "out", None) or getattr(args, "out_dir", None) or "~/Backups/gitvoice-watch"
+    print(f"watching {args.base} every {interval}s → {out} (Ctrl+C to stop)")
+    try:
+        while True:
+            status, data = request(args.base, "/api/invoices", token=token)
+            count = len((data or {}).get("invoices", []))
+            print(f"[{time.strftime('%H:%M:%S')}] invoices: {count}")
+            # trigger backup if --backup flag
+            if getattr(args, "backup", False):
+                try:
+                    cmd_backup(type("A", (), {"base": args.base, "out": out})())
+                except Exception as e:
+                    print(f"backup error: {e}")
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        print("watch stopped")
+
+def cmd_bulk_import(args):
+    token = require_auth(args.base)
+    rows = json.load(open(args.file))
+    if not isinstance(rows, list):
+        rows = rows.get("clients") or rows.get("data") or []
+    status, data = request(args.base, "/api/clients/bulk", method="POST", token=token, payload={"clients": rows})
+    print(json.dumps(data or {"status": status}, indent=2))
+
+def cmd_discover(args):
+    token = require_auth(args.base)
+    status, data = request(args.base, "/api/clients/discover", method="POST", token=token, payload={"query": args.query})
+    print(json.dumps(data or {"status": status}, indent=2))
+
+def cmd_void(args):
+    token = require_auth(args.base)
+    status, data = request(args.base, f"/api/invoices/{args.id}/void", method="POST", token=token)
+    print(json.dumps(data or {"status": status}, indent=2))
+
+def cmd_reissue(args):
+    token = require_auth(args.base)
+    status, data = request(args.base, f"/api/invoices/{args.id}/reissue", method="POST", token=token)
+    print(json.dumps(data or {"status": status}, indent=2))
+
+def cmd_time_import(args):
+    token = require_auth(args.base)
+    entries = json.load(open(args.file))
+    if isinstance(entries, dict):
+        entries = entries.get("entries") or entries.get("data") or []
+    status, data = request(args.base, f"/api/clients/{args.client_id}/time/import", method="POST", token=token, payload={"entries": entries})
+    print(json.dumps(data or {"status": status}, indent=2))
+
+def cmd_operators(args):
+    token = require_auth(args.base)
+    status, data = request(args.base, "/api/operators", token=token)
+    print(json.dumps(data or {"status": status}, indent=2))
+
 def main():
     p = argparse.ArgumentParser(description="Gitvoice agent CLI")
     p.add_argument("--base", default=DEFAULT_BASE, help="worker base URL (default: prod)")
@@ -511,6 +570,29 @@ def main():
     pl.add_argument("--client-id", required=True)
     pl.add_argument("--password", required=True)
     sub.add_parser("portal-invoices")
+    w = sub.add_parser("watch")
+    w.add_argument("--interval", type=int, default=60, help="poll interval seconds")
+    w.add_argument("--out", default=os.path.expanduser("~/Backups/gitvoice-watch"))
+    w.add_argument("--backup", action="store_true", help="run backup each interval")
+
+    bi = sub.add_parser("bulk-import")
+    bi.add_argument("--file", required=True, help="JSON file with array of clients")
+
+    di = sub.add_parser("discover")
+    di.add_argument("--query", required=True, help="GitHub org or user to scan")
+
+    vo = sub.add_parser("void")
+    vo.add_argument("--id", required=True)
+
+    re = sub.add_parser("reissue")
+    re.add_argument("--id", required=True)
+
+    ti = sub.add_parser("time-import")
+    ti.add_argument("--client-id", required=True)
+    ti.add_argument("--file", required=True, help="JSON file with time entries")
+
+    sub.add_parser("operators")
+
     ca = sub.add_parser("client-add")
     ca.add_argument("--name", required=True)
     ca.add_argument("--email", required=True)
@@ -553,7 +635,10 @@ def main():
           "preview": cmd_preview, "create": cmd_create, "get": cmd_get, "pdf": cmd_pdf,
           "list": cmd_list, "invoice-delete": cmd_invoice_delete, "backup": cmd_backup,
           "portal-clients": cmd_portal_clients, "portal-login": cmd_portal_login,
-          "portal-invoices": cmd_portal_invoices}[args.cmd]
+          "portal-invoices": cmd_portal_invoices,
+          "watch": cmd_watch, "bulk-import": cmd_bulk_import, "discover": cmd_discover,
+          "void": cmd_void, "reissue": cmd_reissue, "time-import": cmd_time_import,
+          "operators": cmd_operators}[args.cmd]
     fn(args)
 
 

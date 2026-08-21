@@ -94,7 +94,8 @@ export function renderInvoiceHtml(invoice: InvoiceDraft | InvoiceRecord): string
   for (let offset = 0; offset < commits.length; offset += 12) {
     pages.push(renderActivityPage(invoice, commits.slice(offset, offset + 12), Math.floor(offset / 12) + 3));
   }
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(invoice.number || "Invoice")}</title><style>${PAPER_CSS}</style></head><body>${pages.join("")}</body></html>`;
+  const themeCss = invoice.provider.theme?.accentColor ? `:root{--blue:${invoice.provider.theme.accentColor};}` : "";
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(invoice.number || "Invoice")}</title><style>${PAPER_CSS}${themeCss}</style></head><body>${pages.join("")}</body></html>`;
 }
 
 function renderCoverPage(invoice: InvoiceDraft | InvoiceRecord): string {
@@ -120,7 +121,13 @@ function renderCoverPage(invoice: InvoiceDraft | InvoiceRecord): string {
 }
 
 function renderActivityPage(invoice: InvoiceDraft | InvoiceRecord, commits: InvoiceDraft["activity"]["commits"], page: number): string {
-  return `<section class="invoice-page activity-page"><div class="page-inner"><header class="activity-header"><div><div class="eyebrow">${escapeHtml(invoice.number || "Draft invoice")}</div><h1>Activity log</h1></div><div class="page-number">Page ${page}</div></header><p class="activity-intro">${escapeHtml(invoice.summary.activitySummary)} Commit links cover ${formatDate(invoice.periodStart, { month: "short", day: "numeric", year: "numeric" })} – ${formatDate(invoice.periodEnd, { month: "short", day: "numeric", year: "numeric" })}.</p><table class="activity-table"><thead><tr><th>Date</th><th>Commit</th><th>Changes</th></tr></thead><tbody>${commits.map((commit) => `<tr><td>${formatDate(commit.date, { month: "short", day: "numeric" })}</td><td class="message"><a href="${escapeAttribute(commit.url)}"><strong>${escapeHtml(commit.message)}</strong></a><div class="repo">${escapeHtml(commit.repo)} · ${escapeHtml(commit.author)}</div></td><td>+${commit.additions}<br>−${commit.deletions}<br><span class="muted">${commit.fileCount ?? commit.files.length} files</span></td></tr>`).join("")}</tbody></table><footer class="activity-footer"><span>${escapeHtml(invoice.provider.businessName)}</span><span>${escapeHtml(invoice.number || "Draft")}</span></footer></div></section>`;
+  const signals = (invoice.activity.signals || []).slice(0, 8);
+  return `<section class="invoice-page activity-page"><div class="page-inner"><header class="activity-header"><div><div class="eyebrow">${escapeHtml(invoice.number || "Draft invoice")}</div><h1>Activity log</h1></div><div class="page-number">Page ${page}</div></header><p class="activity-intro">${escapeHtml(invoice.summary.activitySummary)} Commit links cover ${formatDate(invoice.periodStart, { month: "short", day: "numeric", year: "numeric" })} – ${formatDate(invoice.periodEnd, { month: "short", day: "numeric", year: "numeric" })}.</p>${signals.length ? `<div class="activity-signals"><p class="label">Merged PRs & releases in period</p><ul>${signals.map((s) => `<li><a href="${escapeAttribute(s.url)}">${escapeHtml(s.title)}</a> <span class="muted">${escapeHtml(s.repo)} · ${escapeHtml(s.type)}${s.labels.length ? " · " + escapeHtml(s.labels.join(", ")) : ""}</span></li>`).join("")}</ul></div>` : ""}<table class="activity-table"><thead><tr><th>Date</th><th>Commit</th><th>Changes</th></tr></thead><tbody>${commits.map((commit) => {
+    const files = (commit.files || []).slice(0, 4);
+    const more = (commit.fileCount ?? commit.files.length) - files.length;
+    const fileLinks = files.map((f) => `<a href="${escapeAttribute(`https://github.com/${commit.repo}/blob/${commit.sha}/${f}`)}">${escapeHtml(f)}</a>`).join(", ");
+    return `<tr><td>${formatDate(commit.date, { month: "short", day: "numeric" })}</td><td class="message"><a href="${escapeAttribute(commit.url)}"><strong>${escapeHtml(commit.message)}</strong></a><div class="repo">${escapeHtml(commit.repo)} · ${escapeHtml(commit.author)}</div>${files.length ? `<div class="repo" style="margin-top:2mm">Files: ${fileLinks}${more > 0 ? ` <span class="muted">+${more} more</span>` : ""}</div>` : ""}</td><td>+${commit.additions}<br>−${commit.deletions}<br><span class="muted">${commit.fileCount ?? commit.files.length} files</span></td></tr>`;
+  }).join("")}</tbody></table><footer class="activity-footer"><span>${escapeHtml(invoice.provider.businessName)}</span><span>${escapeHtml(invoice.number || "Draft")}</span></footer></div></section>`;
 }
 
 function renderWorkSummaryPage(invoice: InvoiceDraft | InvoiceRecord): string {

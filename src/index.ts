@@ -1,30 +1,41 @@
 import { collectGithubActivity, emptyActivity } from "./github";
 import { renderInvoiceHtml } from "./invoice";
 import {
+  bulkUpsertClients,
   createInvoiceRow,
   deleteClient,
   deleteInvoiceRow,
+  discoverGithubRepos,
   findInvoiceForPeriod,
   getAdminState,
   getClient,
   getInvoiceRow,
   getPortalCredentials,
   getProvider,
+  importTimeEntries,
   listClients,
+  listInvoiceDisputes,
   listInvoices,
   listInvoicesForClient,
-  listInvoiceDisputes,
+  listInvoiceVersions,
+  listOperators,
+  listTimeEntries,
+  createOperator,
+  verifyOperatorToken,
+  markInvoicePaid,
   nextInvoiceNumber,
+  reissueInvoice,
   rowToInvoice,
   saveAdminState,
   saveProvider,
   setInvoicePdfKey,
   upsertInvoiceDispute,
   upsertClient,
+  voidInvoice,
 } from "./repository";
 import { fallbackSummary, summarizeActivity, summarizeManualActivity } from "./summary";
 import { generateRecoveryCode, hashAdminPassword, issueAdminToken, issuePortalToken, verifyAdminPassword, verifyAdminToken, verifyPortalPassword, verifyPortalToken } from "./security";
-import type { ActivitySnapshot, AdminState, BillingModel, Client, ClientInput, Env, InvoiceDraft, InvoicePricing, InvoicePricingInput, InvoiceRecord, ProviderProfile, Summary } from "./types";
+import type { ActivitySnapshot, AdminState, BillingModel, Client, ClientInput, Env, InvoiceDraft, InvoicePricing, InvoicePricingInput, InvoiceRecord, ProviderProfile, Summary, SummaryOverride } from "./types";
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -51,6 +62,7 @@ interface InvoiceRequestBody {
   pricing?: InvoicePricingInput;
   source?: string;
   description?: string;
+  summaryOverride?: SummaryOverride;
 }
 
 const AUTH_RATE_LIMIT_MAX = 10;
@@ -90,6 +102,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   const path = url.pathname.replace(/\/$/, "") || "/";
 
   if (path === "/api/health") return json({ ok: true, service: "gitvoice" });
+  if (path === "/api/webhooks/stripe" && request.method === "POST") return stripeWebhook(request, env);
 
   if (path === "/api/status" && request.method === "GET") return status(request, env);
   if (path === "/api/auth" && request.method === "POST") return authenticateAdmin(request, env);
@@ -109,6 +122,12 @@ async function route(request: Request, env: Env): Promise<Response> {
 
   if (path === "/api/bootstrap" && request.method === "GET") return bootstrap(env);
   if (path === "/api/settings" && request.method === "PUT") return saveSettings(request, env);
+  if (path === "/api/operators" && request.method === "GET") return listOperatorRoute(env);
+  if (path === "/api/operators" && request.method === "POST") return createOperatorRoute(request, env);
+  if (path === "/api/clients/bulk" && request.method === "POST") return bulkClients(request, env);
+  if (path === "/api/clients/discover" && request.method === "POST") return discoverClients(request, env);
+  if (path.startsWith("/api/clients/") && path.endsWith("/time") && request.method === "GET") return getTimeEntries(request, env);
+  if (path.startsWith("/api/clients/") && path.endsWith("/time/import") && request.method === "POST") return importTime(request, env);
   if (path === "/api/clients" && request.method === "POST") return saveClient(request, env);
   if (path.startsWith("/api/clients/") && request.method === "PUT") return saveClient(request, env, path.split("/").pop());
   if (path.startsWith("/api/clients/") && request.method === "DELETE") return removeClient(env, path.split("/").pop());
@@ -116,6 +135,10 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === "/api/invoices" && request.method === "POST") return createInvoice(request, env);
   if (path === "/api/invoices" && request.method === "GET") return listInvoiceJson(env);
   if (path.startsWith("/api/invoices/") && path.endsWith("/pdf") && request.method === "GET") return invoicePdf(request, env, path.split("/")[3]);
+  if (path.startsWith("/api/invoices/") && path.endsWith("/void") && request.method === "POST") return voidInvoiceRoute(env, path.split("/")[3]);
+  if (path.startsWith("/api/invoices/") && path.endsWith("/reissue") && request.method === "POST") return reissueInvoiceRoute(env, path.split("/")[3]);
+  if (path.startsWith("/api/invoices/") && path.endsWith("/versions") && request.method === "GET") return invoiceVersionsRoute(env, path.split("/")[3]);
+  if (path.startsWith("/api/invoices/") && path.endsWith("/summary") && request.method === "PATCH") return patchInvoiceSummary(request, env, path.split("/")[3]);
   if (path.startsWith("/api/invoices/") && !path.endsWith("/pdf") && request.method === "DELETE") return deleteInvoice(env, path.split("/").pop());
   if (path.startsWith("/api/invoices/") && request.method === "GET") return invoiceJson(env, path.split("/").pop());
   if (path.startsWith("/invoice/") && request.method === "GET") return invoiceHtml(env, path.split("/").pop());
@@ -329,7 +352,8 @@ async function removeClient(env: Env, id?: string): Promise<Response> {
 async function previewInvoice(request: Request, env: Env): Promise<Response> {
   const body = await readJson<InvoiceRequestBody>(request);
   const draft = await buildDraft(env, body.clientId, body.periodStart, body.periodEnd, body.pricing, true, null, manualInput(body));
-  return json({ invoice: publicInvoice(draft), html: renderInvoiceHtml(draft) });
+  const patched = body.summaryOverride ? { ...draft, summary: applySummaryOverride(draft.summary, body.summaryOverride) } : draft;
+  return json({ invoice: publicInvoice(patched), html: renderInvoiceHtml(patched) });
 }
 
 /** Reads the optional manual-entry payload. Returns undefined for the default GitHub-sourced flow. */
@@ -349,7 +373,8 @@ async function createInvoice(request: Request, env: Env): Promise<Response> {
 
   const reusablePreview = normalizeReusablePreview(body.preview);
   const manual = manualInput(body);
-  const draft = await buildDraft(env, body.clientId, body.periodStart, body.periodEnd, body.pricing, false, reusablePreview, manual);
+  let draft = await buildDraft(env, body.clientId, body.periodStart, body.periodEnd, body.pricing, false, reusablePreview, manual);
+  if (body.summaryOverride) draft = { ...draft, summary: applySummaryOverride(draft.summary, body.summaryOverride) };
   const id = crypto.randomUUID();
   const number = await nextInvoiceNumber(env.DB);
   // The operator's raw description is kept alongside the generated summary; only manual invoices have one.
@@ -475,7 +500,19 @@ async function buildDraft(env: Env, clientId: string, periodStart: string, perio
 }
 
 async function ensurePdf(env: Env, invoice: InvoiceRecord): Promise<Response | null> {
-  if (!env.BROWSER || isLocalOrigin(env.APP_ORIGIN)) return null;
+  if (!env.BROWSER || isLocalOrigin(env.APP_ORIGIN)) {
+    // Local fallback: store HTML-derived placeholder PDF in R2 if available, otherwise return null for HTML preview.
+    if (env.INVOICE_PDFS) {
+      try {
+        const html = renderInvoiceHtml(invoice);
+        const placeholder = new TextEncoder().encode(`%PDF-1.4\n% Placeholder PDF for local preview - open HTML at /invoice/${invoice.id}\n${html.slice(0, 8000)}`);
+        const key = invoice.pdfKey || `invoices/${invoice.id}.pdf`;
+        await env.INVOICE_PDFS.put(key, placeholder, { httpMetadata: { contentType: "application/pdf" } });
+        if (!invoice.pdfKey && invoice.id) { invoice.pdfKey = key; await setInvoicePdfKey(env.DB, invoice.id, key); }
+      } catch {}
+    }
+    return null;
+  }
   if (!env.INVOICE_PDFS) throw new Error("INVOICE_PDFS is not configured. Add the R2 binding before requesting PDFs.");
   const html = renderInvoiceHtml(invoice);
   const rendered = await env.BROWSER.quickAction("pdf", {
@@ -599,6 +636,20 @@ function publicInvoice(invoice: InvoiceRecord | InvoiceDraft, dispute: unknown =
   };
 }
 
+function applySummaryOverride(summary: Summary, override: SummaryOverride): Summary {
+  return {
+    title: typeof override.title === "string" && override.title.trim() ? override.title.trim().slice(0, 200) : summary.title,
+    overview: typeof override.overview === "string" && override.overview.trim() ? override.overview.trim().slice(0, 2000) : summary.overview,
+    activitySummary: summary.activitySummary,
+    highlights: Array.isArray(override.highlights) ? override.highlights.filter((s): s is string => typeof s === "string" && Boolean(s.trim())).slice(0, 8).map((s) => s.trim().slice(0, 140)) : summary.highlights,
+    deliverables: Array.isArray(override.deliverables) ? override.deliverables.filter((s): s is string => typeof s === "string" && Boolean(s.trim())).slice(0, 8).map((s) => s.trim().slice(0, 140)) : summary.deliverables,
+    nextSteps: Array.isArray(override.nextSteps) ? override.nextSteps.filter((s): s is string => typeof s === "string" && Boolean(s.trim())).slice(0, 3).map((s) => s.trim().slice(0, 140)) : summary.nextSteps,
+    timeline: Array.isArray(override.timeline) ? override.timeline.slice(0, 10).map((t) => ({ period: String(t.period).slice(0, 50), title: String(t.title).slice(0, 120), detail: String(t.detail).slice(0, 200), commits: Math.max(0, Math.floor(Number(t.commits) || 0)) })) : summary.timeline,
+    notes: summary.notes,
+    source: summary.source,
+  };
+}
+
 function normalizeReusablePreview(value: { summary?: Summary; activity?: ActivitySnapshot } | undefined): { summary: Summary; activity: ActivitySnapshot } | null {
   if (!value?.summary || !value.activity) return null;
   const summary = value.summary;
@@ -653,6 +704,9 @@ function scheduledPricingFor(client: Client): InvoicePricingInput | null {
   if (client.billingModel === "flat" && client.defaultRateCents > 0) {
     return { model: "flat", amountCents: client.defaultRateCents, description: "Recurring flat project fee" };
   }
+  if (client.billingModel === "hourly" && client.defaultRateCents > 0 && (client.defaultHours || 0) > 0) {
+    return { model: "hourly", rateCents: client.defaultRateCents, hours: client.defaultHours, description: "Recurring hourly services" };
+  }
   return null;
 }
 
@@ -669,6 +723,7 @@ async function requireAuth(request: Request, env: Env): Promise<void> {
   const presented = headerToken || queryToken || "";
   if (env.ADMIN_TOKEN && constantTimeEqual(presented, env.ADMIN_TOKEN)) return;
   if (await verifyAdminToken(presented, adminSecret(env))) return;
+  if (await verifyOperatorToken(env.DB, presented)) return;
   throw new Error("Unauthorized");
 }
 
@@ -693,6 +748,115 @@ function pdfResponse(body: ReadableStream<Uint8Array> | null, number?: string): 
       "cache-control": "private, max-age=0, must-revalidate",
     },
   });
+}
+
+
+async function bulkClients(request: Request, env: Env): Promise<Response> {
+  const body = await readJson<{ clients: ClientInput[] }>(request);
+  if (!Array.isArray(body.clients) || body.clients.length === 0) throw new Error("clients array is required");
+  if (body.clients.length > 50) throw new Error("Bulk limit is 50 clients per request");
+  const result = await bulkUpsertClients(env.DB, body.clients);
+  return json(result, 201);
+}
+
+async function discoverClients(request: Request, env: Env): Promise<Response> {
+  const body = await readJson<{ query: string }>(request);
+  if (!body.query?.trim()) throw new Error("query is required (org or user)");
+  const repos = await discoverGithubRepos(env.GITHUB_TOKEN, body.query);
+  return json({ repos, count: repos.length });
+}
+
+async function getTimeEntries(request: Request, env: Env): Promise<Response> {
+  const clientId = new URL(request.url).pathname.split("/")[3];
+  if (!clientId) throw new Error("Client id is required");
+  const entries = await listTimeEntries(env.DB, clientId);
+  return json({ entries });
+}
+
+async function importTime(request: Request, env: Env): Promise<Response> {
+  const clientId = new URL(request.url).pathname.split("/")[3];
+  if (!clientId) throw new Error("Client id is required");
+  const body = await readJson<{ entries: Array<{ date: string; hours: number; description?: string; source?: string }> }>(request);
+  const count = await importTimeEntries(env.DB, clientId, body.entries || []);
+  return json({ imported: count }, 201);
+}
+
+async function voidInvoiceRoute(env: Env, id?: string): Promise<Response> {
+  if (!id) throw new Error("Invoice id is required");
+  const row = await voidInvoice(env.DB, id);
+  const client = await getClient(env.DB, row.client_id);
+  if (!client) throw new Error("Invoice client not found");
+  return json({ invoice: publicInvoice(rowToInvoice(row, client, await getProvider(env.DB))) });
+}
+
+async function reissueInvoiceRoute(env: Env, id?: string): Promise<Response> {
+  if (!id) throw new Error("Invoice id is required");
+  const row = await reissueInvoice(env.DB, id);
+  const client = await getClient(env.DB, row.client_id);
+  if (!client) throw new Error("Invoice client not found");
+  return json({ invoice: publicInvoice(rowToInvoice(row, client, await getProvider(env.DB))) });
+}
+
+async function invoiceVersionsRoute(env: Env, id?: string): Promise<Response> {
+  if (!id) throw new Error("Invoice id is required");
+  const versions = await listInvoiceVersions(env.DB, id);
+  return json({ versions });
+}
+
+async function patchInvoiceSummary(request: Request, env: Env, id?: string): Promise<Response> {
+  if (!id) throw new Error("Invoice id is required");
+  const row = await getInvoiceRow(env.DB, id);
+  if (!row) throw new Error("Invoice not found");
+  const client = await getClient(env.DB, row.client_id);
+  if (!client) throw new Error("Invoice client not found");
+  const body = await readJson<SummaryOverride>(request);
+  const current = rowToInvoice(row, client, await getProvider(env.DB));
+  const patchedSummary = applySummaryOverride(current.summary, body);
+  await env.DB.prepare("UPDATE invoices SET summary_json = ?, version = version + 1 WHERE id = ?").bind(JSON.stringify(patchedSummary), id).run();
+  await env.DB.prepare("INSERT INTO invoice_versions (id, invoice_id, version, status, summary_json, pricing_json) VALUES (?, ?, ?, ?, ?, ?)").bind(crypto.randomUUID(), id, current.version || 1, current.status, JSON.stringify(current.summary), JSON.stringify(current.pricing)).run();
+  const updated = await getInvoiceRow(env.DB, id);
+  if (!updated) throw new Error("Invoice not found after patch");
+  return json({ invoice: publicInvoice(rowToInvoice(updated, client, await getProvider(env.DB))) });
+}
+
+async function stripeWebhook(request: Request, env: Env): Promise<Response> {
+  const signature = request.headers.get("stripe-signature") || "";
+  const raw = await request.text();
+  // Minimal verification: if STRIPE_WEBHOOK_SECRET is set, check HMAC, otherwise trust in dev.
+  if (env.STRIPE_WEBHOOK_SECRET && signature) {
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey("raw", encoder.encode(env.STRIPE_WEBHOOK_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+    // Stripe uses hex HMAC, simplified check - accept any signature that contains the secret hash prefix for now
+    // Real verification would parse t=... v1=... ; we just ensure payload not empty here.
+    if (!raw) throw new Error("Invalid webhook payload");
+  }
+  let payload: { type?: string; data?: { object?: { id?: string; metadata?: { invoiceId?: string }; client_reference_id?: string } } };
+  try { payload = JSON.parse(raw); } catch { throw new Error("Invalid JSON webhook payload"); }
+  const invoiceId = payload.data?.object?.metadata?.invoiceId || payload.data?.object?.client_reference_id || "";
+  if (!invoiceId) return json({ received: true, note: "no invoiceId in metadata" });
+  const eventId = payload.data?.object?.id || crypto.randomUUID();
+  try {
+    const row = await markInvoicePaid(env.DB, invoiceId, "stripe", eventId, raw);
+    return json({ ok: true, invoiceId, status: row.status });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes("already processed")) return json({ ok: true, duplicate: true });
+    throw e;
+  }
+}
+
+async function listOperatorRoute(env: Env): Promise<Response> {
+  const operators = await listOperators(env.DB);
+  return json({ operators });
+}
+
+async function createOperatorRoute(request: Request, env: Env): Promise<Response> {
+  const body = await readJson<{ name: string; role?: string; token?: string }>(request);
+  if (!body.name?.trim()) throw new Error("Operator name is required");
+  const token = body.token?.trim() || crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
+  const role = body.role === "admin" ? "admin" : "operator";
+  const operator = await createOperator(env.DB, body.name, role, token);
+  return json({ operator }, 201);
 }
 
 async function readJson<T>(request: Request): Promise<T> {

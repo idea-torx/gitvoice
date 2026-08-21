@@ -40,6 +40,7 @@ export function rowToClient(row: D1ClientRow): Client {
     billingDay: row.billing_day,
     billingModel: row.billing_model === "hourly" ? "hourly" : "flat",
     defaultRateCents: row.flat_amount_cents,
+    defaultHours: Number(row.default_hours || 0) || undefined,
     currency: row.currency,
     paymentMethod: normalizePaymentMethod(row.payment_method),
     paymentTerms: row.payment_terms,
@@ -69,6 +70,7 @@ export function rowToInvoice(row: D1InvoiceRow, client: Client, provider: Provid
     taxCents: row.tax_cents,
     totalCents: row.total_cents,
     currency: row.currency,
+    version: row.version ?? 1,
     pricing: normalizeStoredPricing(parseJson<Partial<InvoicePricing>>(row.pricing_json, {}), client, row.subtotal_cents),
     summary: {
       title: storedSummary.title || "Services provided",
@@ -150,9 +152,9 @@ export async function upsertClient(db: D1Database, input: ClientInput): Promise<
     .prepare(
       `INSERT INTO clients (
         id, name, email, address, github_repos, github_author, project_context, summary_priorities, cadence, billing_day,
-        billing_model, flat_amount_cents, currency, payment_method, payment_terms, payment_days, special_terms, tax_rate,
+        billing_model, flat_amount_cents, default_hours, currency, payment_method, payment_terms, payment_days, special_terms, tax_rate,
         portal_password_hash, portal_password_salt, active, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         email = excluded.email,
@@ -165,6 +167,7 @@ export async function upsertClient(db: D1Database, input: ClientInput): Promise<
         billing_day = excluded.billing_day,
         billing_model = excluded.billing_model,
         flat_amount_cents = excluded.flat_amount_cents,
+        default_hours = excluded.default_hours,
         currency = excluded.currency,
         payment_method = excluded.payment_method,
         payment_terms = excluded.payment_terms,
@@ -189,6 +192,7 @@ export async function upsertClient(db: D1Database, input: ClientInput): Promise<
       normalized.billingDay,
       normalized.billingModel,
       normalized.defaultRateCents,
+      normalized.defaultHours ?? 0,
       normalized.currency,
       normalized.paymentMethod,
       normalized.paymentTerms,
@@ -282,8 +286,8 @@ export async function createInvoiceRow(
     .prepare(
       `INSERT INTO invoices (
         id, number, client_id, status, period_start, period_end, issued_at, due_at, currency,
-        subtotal_cents, tax_cents, total_cents, pricing_json, summary_json, activity_json, manual_description, pdf_key
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        subtotal_cents, tax_cents, total_cents, pricing_json, summary_json, activity_json, manual_description, pdf_key, version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       values.id,
@@ -303,6 +307,7 @@ export async function createInvoiceRow(
       values.activity_json,
       values.manual_description ?? null,
       values.pdf_key ?? null,
+      values.version ?? 1,
     )
     .run();
 }
@@ -335,6 +340,7 @@ function normalizeClientInput(input: ClientInput): Client {
     billingDay: Math.max(1, Math.min(31, Math.floor(input.billingDay || 1))),
     billingModel: input.billingModel === "hourly" ? "hourly" : "flat",
     defaultRateCents: Math.max(0, Math.round(Number(input.defaultRateCents ?? input.flatAmountCents) || 0)),
+    defaultHours: input.defaultHours !== undefined ? Math.max(0, Number(input.defaultHours)) : undefined,
     currency: (input.currency || "CAD").trim().toUpperCase().slice(0, 3),
     paymentMethod: normalizePaymentMethod(input.paymentMethod),
     paymentTerms: required(input.paymentTerms || "Due on receipt", "Payment terms"),
@@ -396,6 +402,11 @@ function sanitizeProvider(provider: ProviderProfile): ProviderProfile {
     taxId: provider.taxId?.trim() || "",
     remittance: provider.remittance?.trim() || "",
     logoUrl: provider.logoUrl?.trim() || "",
+    theme: provider.theme ? {
+      accentColor: provider.theme.accentColor?.trim() || undefined,
+      fontFamily: provider.theme.fontFamily?.trim() || undefined,
+      headerStyle: provider.theme.headerStyle === "modern" || provider.theme.headerStyle === "minimal" ? provider.theme.headerStyle : "classic",
+    } : undefined,
   };
 }
 
@@ -416,4 +427,122 @@ function parseJson<T>(value: string, fallback: T): T {
 function parseJsonArray(value: string): string[] {
   const parsed = parseJson<unknown>(value, []);
   return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
+// ── Bulk import ──────────────────────────────────────────────────────────────
+
+export async function bulkUpsertClients(db: D1Database, inputs: ClientInput[]): Promise<{ clients: Client[]; errors: Array<{ index: number; error: string }> }> {
+  const clients: Client[] = [];
+  const errors: Array<{ index: number; error: string }> = [];
+  for (let i = 0; i < inputs.length; i++) {
+    try {
+      const client = await upsertClient(db, inputs[i]);
+      clients.push(client);
+    } catch (e) {
+      errors.push({ index: i, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+  return { clients, errors };
+}
+
+export async function discoverGithubRepos(token: string | undefined, query: string): Promise<string[]> {
+  if (!query.trim()) return [];
+  // Query is org name or user/org search; fetch repos via GitHub API.
+  const headers: Record<string, string> = { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const org = query.trim().replace(/^https?:\/\/github\.com\//i, "").split("/")[0];
+  const res = await fetch(`https://api.github.com/orgs/${encodeURIComponent(org)}/repos?per_page=100&sort=updated`, { headers });
+  if (!res.ok) {
+    const userRes = await fetch(`https://api.github.com/users/${encodeURIComponent(org)}/repos?per_page=100&sort=updated`, { headers });
+    if (!userRes.ok) throw new Error(`GitHub discovery failed (${res.status})`);
+    const repos = await userRes.json() as Array<{ full_name: string }>;
+    return repos.map((r) => r.full_name);
+  }
+  const repos = await res.json() as Array<{ full_name: string }>;
+  return repos.map((r) => r.full_name);
+}
+
+// ── Invoice versioning / void / reissue ────────────────────────────────────
+
+export async function createInvoiceVersion(db: D1Database, invoice: D1InvoiceRow): Promise<void> {
+  const nextVersion = (invoice.version ?? 1) + 1;
+  await db.prepare("INSERT INTO invoice_versions (id, invoice_id, version, status, summary_json, pricing_json) VALUES (?, ?, ?, ?, ?, ?)")
+    .bind(crypto.randomUUID(), invoice.id, nextVersion - 1, invoice.status, invoice.summary_json, invoice.pricing_json).run();
+}
+
+export async function listInvoiceVersions(db: D1Database, invoiceId: string): Promise<Array<{ id: string; version: number; status: string; createdAt: string }>> {
+  const { results } = await db.prepare("SELECT id, version, status, created_at as createdAt FROM invoice_versions WHERE invoice_id = ? ORDER BY version DESC").bind(invoiceId).all();
+  return results as Array<{ id: string; version: number; status: string; createdAt: string }>;
+}
+
+export async function voidInvoice(db: D1Database, id: string): Promise<D1InvoiceRow> {
+  const row = await getInvoiceRow(db, id);
+  if (!row) throw new Error("Invoice not found");
+  if (row.status === "void") return row;
+  await createInvoiceVersion(db, row);
+  await db.prepare("UPDATE invoices SET status = 'void', version = version + 1 WHERE id = ?").bind(id).run();
+  const updated = await getInvoiceRow(db, id);
+  if (!updated) throw new Error("Invoice not found after void");
+  return updated;
+}
+
+export async function reissueInvoice(db: D1Database, id: string): Promise<D1InvoiceRow> {
+  const row = await getInvoiceRow(db, id);
+  if (!row) throw new Error("Invoice not found");
+  if (row.status !== "void") throw new Error("Only voided invoices can be reissued");
+  await db.prepare("UPDATE invoices SET status = 'generated', version = version + 1 WHERE id = ?").bind(id).run();
+  const updated = await getInvoiceRow(db, id);
+  if (!updated) throw new Error("Invoice not found after reissue");
+  return updated;
+}
+
+export async function markInvoicePaid(db: D1Database, id: string, provider: string, eventId: string, payload: string): Promise<D1InvoiceRow> {
+  const existing = await db.prepare("SELECT 1 FROM webhook_events WHERE provider = ? AND event_id = ?").bind(provider, eventId).first();
+  if (existing) throw new Error("Webhook event already processed");
+  await db.prepare("INSERT INTO webhook_events (id, invoice_id, provider, event_id, payload) VALUES (?, ?, ?, ?, ?)").bind(crypto.randomUUID(), id, provider, eventId, payload).run();
+  await db.prepare("UPDATE invoices SET status = 'paid', version = version + 1 WHERE id = ?").bind(id).run();
+  const row = await getInvoiceRow(db, id);
+  if (!row) throw new Error("Invoice not found");
+  return row;
+}
+
+// ── Time entries ────────────────────────────────────────────────────────────
+
+export async function listTimeEntries(db: D1Database, clientId: string): Promise<Array<{ id: string; clientId: string; date: string; hours: number; description: string; source: string }>> {
+  const { results } = await db.prepare("SELECT id, client_id as clientId, date, hours, description, source FROM time_entries WHERE client_id = ? ORDER BY date DESC").bind(clientId).all();
+  return results as Array<{ id: string; clientId: string; date: string; hours: number; description: string; source: string }>;
+}
+
+export async function importTimeEntries(db: D1Database, clientId: string, entries: Array<{ date: string; hours: number; description?: string; source?: string }>): Promise<number> {
+  let count = 0;
+  for (const e of entries) {
+    if (!e.date || !Number.isFinite(Number(e.hours)) || Number(e.hours) <= 0) continue;
+    await db.prepare("INSERT INTO time_entries (id, client_id, date, hours, description, source) VALUES (?, ?, ?, ?, ?, ?)")
+      .bind(crypto.randomUUID(), clientId, e.date, Math.round(Number(e.hours) * 100) / 100, (e.description || "").slice(0, 500), (e.source || "manual").slice(0, 20)).run();
+    count++;
+  }
+  return count;
+}
+
+// ── Operators / RBAC ───────────────────────────────────────────────────────
+
+export async function listOperators(db: D1Database): Promise<Array<{ id: string; name: string; role: string; createdAt: string }>> {
+  const { results } = await db.prepare("SELECT id, name, role, created_at as createdAt FROM operators ORDER BY created_at DESC").all();
+  return results as Array<{ id: string; name: string; role: string; createdAt: string }>;
+}
+
+export async function createOperator(db: D1Database, name: string, role: "admin" | "operator", token: string): Promise<{ id: string; name: string; role: string; token: string }> {
+  const { hash, salt } = await hashPortalPassword(token);
+  const id = crypto.randomUUID();
+  await db.prepare("INSERT INTO operators (id, name, role, token_hash, token_salt) VALUES (?, ?, ?, ?, ?)").bind(id, name.trim(), role, hash, salt).run();
+  return { id, name: name.trim(), role, token };
+}
+
+export async function verifyOperatorToken(db: D1Database, presented: string): Promise<{ id: string; name: string; role: string } | null> {
+  const { results } = await db.prepare("SELECT id, name, role, token_hash, token_salt FROM operators").all<{ id: string; name: string; role: string; token_hash: string; token_salt: string }>();
+  const { verifyPortalPassword } = await import("./security");
+  for (const row of results) {
+    if (await verifyPortalPassword(presented, row.token_hash, row.token_salt)) return { id: row.id, name: row.name, role: row.role };
+  }
+  return null;
 }
