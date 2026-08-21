@@ -45,6 +45,9 @@ function bindEvents() {
   $("#brandLogoButton").addEventListener("click", openBrandModal);
   $("#brandForm").addEventListener("submit", saveBrandLogo);
   $("#brandRemoveButton").addEventListener("click", removeBrandLogo);
+  if($("#changePasswordButton")) $("#changePasswordButton").addEventListener("click", openChangePasswordModal);
+  if($("#changePasswordForm")) $("#changePasswordForm").addEventListener("submit", changePassword);
+  if($("#changePasswordDoneButton")) $("#changePasswordDoneButton").addEventListener("click", () => { closeModal("changePasswordModal"); });
   $("#brandModal").addEventListener("click", (event) => { if (event.target === event.currentTarget) closeBrandModal(); });
   bindLogoPreview($("#brandLogoUrl"), $("#brandPreviewImage"), setBrandPreviewStatus, { immediate: false });
   $("#invoiceDeleteButton").addEventListener("click", (event) => deleteInvoice(state.openInvoiceId, event.currentTarget));
@@ -104,35 +107,38 @@ function renderAuthScreen(status) {
   const input = $("#tokenInput");
   const submit = $("#authSubmit");
   const recoverRow = $("#recoverLink").closest(".auth-hint");
-  const resetRow = $("#resetLink") ? $("#resetLink").closest(".auth-hint") : recoverRow;
+  const resetRow = $("#resetLink") ? $("#resetLink").closest(".auth-hint") : null;
   $("#authError").textContent = "";
   input.value = "";
-  if (status.onboarded) {
+  field.classList.remove("hidden");
+  input.autocomplete = "current-password";
+  // Single form: accepts either admin password OR setup token — backend tries both
+  if (!status.onboarded) {
+    if (status.local) {
+      state.mode = "local-setup";
+      title.textContent = "Set up Gitvoice";
+      subcopy.textContent = "Finish a quick setup to start invoicing.";
+      field.classList.add("hidden");
+      submit.textContent = "Get started";
+      if(recoverRow) recoverRow.classList.add("hidden");
+      if(resetRow) resetRow.classList.add("hidden");
+    } else {
+      state.mode = "bootstrap";
+      title.textContent = "Set up Gitvoice";
+      subcopy.textContent = "Paste your setup token to create your admin password.";
+      input.placeholder = "Setup token (ADMIN_TOKEN)";
+      submit.textContent = "Continue";
+      if(recoverRow) recoverRow.classList.add("hidden");
+      if(resetRow) resetRow.classList.add("hidden");
+    }
+  } else {
     state.mode = "login";
     title.textContent = "Welcome back";
-    subcopy.textContent = "Sign in to your workspace.";
-    field.classList.remove("hidden");
-    input.placeholder = "Enter your admin password";
-    input.autocomplete = "current-password";
+    subcopy.textContent = "Sign in — admin password or setup token both work.";
+    input.placeholder = "Admin password or setup token";
     submit.textContent = "Sign in";
-    recoverRow.classList.remove("hidden");
+    if(recoverRow) recoverRow.classList.remove("hidden");
     if(resetRow) resetRow.classList.remove("hidden");
-  } else if (status.local) {
-    state.mode = "local-setup";
-    title.textContent = "Set up Gitvoice";
-    subcopy.textContent = "Finish a quick setup to start invoicing.";
-    field.classList.add("hidden");
-    submit.textContent = "Get started";
-    recoverRow.classList.add("hidden");
-  } else {
-    state.mode = "bootstrap";
-    title.textContent = "Set up Gitvoice";
-    subcopy.textContent = "Enter the setup token from your deployment to continue.";
-    field.classList.remove("hidden");
-    input.placeholder = "Enter your setup token";
-    input.autocomplete = "off";
-    submit.textContent = "Continue";
-    recoverRow.classList.add("hidden");
   }
   showAuth();
 }
@@ -143,11 +149,12 @@ async function authenticate(event) {
   if (state.mode === "local-setup") { openSetup(); return; }
   const value = $("#tokenInput").value.trim();
   if (!value) {
-    $("#authError").textContent = state.mode === "bootstrap" ? "Enter your setup token." : "Enter your admin password.";
+    $("#authError").textContent = "Enter your password or setup token.";
     return;
   }
   const button = $("#authSubmit");
-  setBusy(button, true, state.mode === "bootstrap" ? "Checking…" : "Signing in…");
+  const isBootstrap = state.mode === "bootstrap";
+  setBusy(button, true, isBootstrap ? "Checking…" : "Signing in…");
   try {
     const data = await api("/api/auth", { method: "POST", auth: false, body: { password: value } });
     state.token = data.token;
@@ -155,9 +162,14 @@ async function authenticate(event) {
     if (data.requiresSetup) { openSetup(); }
     else { await connect(); }
   } catch (error) {
-    $("#authError").textContent = error.message === "Request failed (401)" ? (state.mode === "bootstrap" ? "That setup token is not valid." : "Incorrect password.") : error.message || "Could not sign in.";
+    const msg = error.message || "";
+    if (msg.includes("401") || msg.includes("Unauthorized")) {
+      $("#authError").textContent = isBootstrap ? "That setup token is not valid — check Cloudflare ADMIN_TOKEN." : "Incorrect password or token. Try your admin password, setup token, or Reset with setup token below.";
+    } else {
+      $("#authError").textContent = msg || "Could not sign in.";
+    }
   } finally {
-    setBusy(button, false, state.mode === "bootstrap" ? "Continue" : "Sign in");
+    setBusy(button, false, isBootstrap ? "Continue" : "Sign in");
   }
 }
 
@@ -343,6 +355,42 @@ async function resetAccess(event){
     if(state.token) setTimeout(()=> connect(), 800);
   }catch(error){
     $("#resetError").textContent = error.message || "Could not reset password.";
+  }
+}
+
+function openChangePasswordModal(){
+  $("#changePasswordCurrent").value = "";
+  $("#changePasswordNew").value = "";
+  $("#changePasswordConfirm").value = "";
+  $("#changePasswordError").textContent = "";
+  $("#changePasswordFields").classList.remove("hidden");
+  $("#changePasswordDone").classList.add("hidden");
+  $("#changePasswordModal").classList.remove("hidden");
+  setTimeout(()=> $("#changePasswordNew").focus(), 0);
+}
+async function changePassword(event){
+  event.preventDefault();
+  const cur = $("#changePasswordCurrent") ? $("#changePasswordCurrent").value : "";
+  const neu = $("#changePasswordNew").value;
+  const conf = $("#changePasswordConfirm").value;
+  if(neu.length < 8){ $("#changePasswordError").textContent = "New password must be at least 8 characters."; return; }
+  if(neu !== conf){ $("#changePasswordError").textContent = "Passwords do not match."; return; }
+  $("#changePasswordError").textContent = "";
+  try{
+    let data;
+    try{
+      data = await api("/api/auth/reset", { method: "POST", body: { password: neu } });
+    } catch(e){
+      if(String(e.message).includes("Unauthorized") && cur){
+        data = await api("/api/auth/reset", { method: "POST", auth:false, body: { adminToken: cur, password: neu } });
+      } else throw e;
+    }
+    $("#changePasswordFields").classList.add("hidden");
+    $("#changePasswordDone").classList.remove("hidden");
+    $("#changePasswordNewCode").textContent = data.recoveryCode || "";
+    if(data.token){ state.token = data.token; setStoredToken(state.token); }
+  }catch(error){
+    $("#changePasswordError").textContent = error.message || "Could not change password.";
   }
 }
 

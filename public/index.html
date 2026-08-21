@@ -65,6 +65,7 @@
         <nav class="header-actions" aria-label="Workspace actions">
           <button class="icon-button theme-toggle" type="button" data-theme-toggle aria-label="Switch to light mode"><svg class="theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.4M12 19.1v2.4M2.5 12h2.4M19.1 12h2.4M5 5l1.7 1.7M17.3 17.3L19 19M19 5l-1.7 1.7M6.7 17.3L5 19"/></svg><svg class="theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg></button>
           <a class="button button-secondary header-portal" href="/portal">Client portal</a>
+          <button id="changePasswordButton" class="button button-quiet" type="button">Change password</button>
           <button id="signOutButton" class="button button-quiet" type="button">Sign out</button>
         </nav>
       </div>
@@ -319,6 +320,25 @@
           <div class="modal-actions"><button type="button" id="resetDoneButton" class="button button-primary">Continue</button></div>
         </div>
         <div id="resetError" class="form-error"></div>
+      </form>
+    </div>
+
+    <div id="changePasswordModal" class="modal-backdrop hidden">
+      <form id="changePasswordForm" class="modal-card">
+        <div class="modal-heading"><div><p class="section-label">Workspace</p><h2>Change password</h2></div><button type="button" class="close-button" data-close="changePasswordModal" aria-label="Close change password">×</button></div>
+        <p class="modal-description">Pick a new password. If your session is still valid you don’t need the setup token — otherwise paste <code>ADMIN_TOKEN</code> as current.</p>
+        <div id="changePasswordFields">
+          <label class="field"><span>Current / setup token <small>Optional if signed in</small></span><div class="secret-input"><input id="changePasswordCurrent" type="password" autocomplete="off" placeholder="Paste ADMIN_TOKEN only if asked" /><button class="password-toggle" type="button" data-password-toggle="changePasswordCurrent" aria-label="Show token" aria-pressed="false"><span class="password-eye" aria-hidden="true"></span></button></div></label>
+          <label class="field"><span>New password</span><div class="secret-input"><input id="changePasswordNew" type="password" autocomplete="new-password" placeholder="At least 8 characters" /><button class="password-toggle" type="button" data-password-toggle="changePasswordNew" aria-label="Show password" aria-pressed="false"><span class="password-eye" aria-hidden="true"></span></button></div></label>
+          <label class="field"><span>Confirm password</span><div class="secret-input"><input id="changePasswordConfirm" type="password" autocomplete="new-password" placeholder="Repeat password" /><button class="password-toggle" type="button" data-password-toggle="changePasswordConfirm" aria-label="Show password" aria-pressed="false"><span class="password-eye" aria-hidden="true"></span></button></div></label>
+          <div class="modal-actions"><button type="button" class="button button-secondary" data-close="changePasswordModal">Cancel</button><button class="button button-primary" type="submit">Update password</button></div>
+        </div>
+        <div id="changePasswordDone" class="hidden">
+          <p class="modal-description">Password updated. Save this new recovery code.</p>
+          <div class="recovery-code" id="changePasswordNewCode"></div>
+          <div class="modal-actions"><button type="button" id="changePasswordDoneButton" class="button button-primary">Done</button></div>
+        </div>
+        <div id="changePasswordError" class="form-error"></div>
       </form>
     </div>
 
