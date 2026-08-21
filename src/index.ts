@@ -107,6 +107,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === "/api/status" && request.method === "GET") return status(request, env);
   if (path === "/api/auth" && request.method === "POST") return authenticateAdmin(request, env);
   if (path === "/api/auth/recover" && request.method === "POST") return recoverAdmin(request, env);
+  if (path === "/api/auth/reset" && request.method === "POST") return resetAdmin(request, env);
   if (path === "/api/setup" && request.method === "POST") return setupAdmin(request, env);
 
   if (path === "/api/portal/clients" && request.method === "GET") return portalClients(request, env);
@@ -208,6 +209,40 @@ async function recoverAdmin(request: Request, env: Env): Promise<Response> {
     recoverySalt: recoveryCreds.salt,
   });
   return json({ recoveryCode: newCode });
+}
+
+async function resetAdmin(request: Request, env: Env): Promise<Response> {
+  if (!allowAuthAttempt(request)) return tooManyAttempts();
+  const body = await readJson<{ adminToken?: string; recoveryCode?: string; password?: string }>(request);
+  const password = body.password || "";
+  assertPassword(password);
+  const adminToken = (body.adminToken || "").trim();
+  const recoveryCode = (body.recoveryCode || "").trim();
+  const admin = await getAdminState(env.DB);
+  let authorized = false;
+  if (adminToken && env.ADMIN_TOKEN && constantTimeEqual(adminToken, env.ADMIN_TOKEN)) authorized = true;
+  if (!authorized && recoveryCode && admin.recoveryHash && admin.recoverySalt) {
+    if (await verifyAdminPassword(recoveryCode, admin.recoveryHash, admin.recoverySalt)) authorized = true;
+  }
+  // Also allow a valid admin session token as authorization (for logged-in reset)
+  if (!authorized) {
+    const url = new URL(request.url);
+    const headerToken = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") || url.searchParams.get("token") || "";
+    if (headerToken && (await verifyAdminToken(headerToken, adminSecret(env)))) authorized = true;
+  }
+  if (!authorized) throw new Error("Unauthorized: valid setup token or recovery code required");
+  const passwordCreds = await hashAdminPassword(password);
+  const newCode = generateRecoveryCode();
+  const recoveryCreds = await hashAdminPassword(newCode);
+  await saveAdminState(env.DB, {
+    onboarded: true,
+    passwordHash: passwordCreds.hash,
+    passwordSalt: passwordCreds.salt,
+    recoveryHash: recoveryCreds.hash,
+    recoverySalt: recoveryCreds.salt,
+    setupAt: admin.setupAt || new Date().toISOString(),
+  });
+  return json({ ok: true, recoveryCode: newCode, token: await issueAdminToken(adminSecret(env)) });
 }
 
 async function setupAdmin(request: Request, env: Env): Promise<Response> {
@@ -542,6 +577,12 @@ function isLocalRequest(request: Request): boolean {
 }
 
 async function runScheduled(time: number, env: Env): Promise<void> {
+  try {
+    const admin = await getAdminState(env.DB);
+    if (admin.onboarded && env.INVOICE_PDFS) {
+      await env.INVOICE_PDFS.put(`backups/admin-state-${new Date(time).toISOString().slice(0,10)}.json`, JSON.stringify(admin), { httpMetadata: { contentType: "application/json" } });
+    }
+  } catch {}
   const now = new Date(time);
   const clients = await listClients(env.DB, false);
   for (const period of duePeriods(now)) {

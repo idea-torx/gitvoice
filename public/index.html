@@ -54,6 +54,7 @@
         </label>
         <button id="authSubmit" class="button button-primary button-full" type="submit">Sign in</button>
         <p class="auth-hint"><button id="recoverLink" class="text-button" type="button">Lost access? Use your recovery code</button></p>
+        <p class="auth-hint"><button id="resetLink" class="text-button" type="button">Reset with setup token</button></p>
         <div id="authError" class="form-error" role="alert"></div>
       </form>
     </div>
@@ -299,6 +300,25 @@
           <div class="modal-actions"><button type="button" id="recoverDoneButton" class="button button-primary">Sign in</button></div>
         </div>
         <div id="recoverError" class="form-error"></div>
+      </form>
+    </div>
+
+    <div id="resetModal" class="modal-backdrop hidden">
+      <form id="resetForm" class="modal-card">
+        <div class="modal-heading"><div><p class="section-label">Reset password</p><h2>Use setup token</h2></div><button type="button" class="close-button" data-close="resetModal" aria-label="Close reset">×</button></div>
+        <p class="modal-description">Paste the setup token from your Cloudflare deployment (<code>ADMIN_TOKEN</code>) and choose a new password. No Wrangler deploy needed — this works from the browser.</p>
+        <div id="resetFields">
+          <label class="field"><span>Setup token</span><div class="secret-input"><input id="resetToken" type="password" autocomplete="off" placeholder="Paste ADMIN_TOKEN" /><button class="password-toggle" type="button" data-password-toggle="resetToken" aria-label="Show token" aria-pressed="false"><span class="password-eye" aria-hidden="true"></span></button></div></label>
+          <label class="field"><span>New password</span><div class="secret-input"><input id="resetPassword" type="password" autocomplete="new-password" placeholder="At least 8 characters" /><button class="password-toggle" type="button" data-password-toggle="resetPassword" aria-label="Show password" aria-pressed="false"><span class="password-eye" aria-hidden="true"></span></button></div></label>
+          <label class="field"><span>Confirm password</span><div class="secret-input"><input id="resetConfirm" type="password" autocomplete="new-password" placeholder="Repeat password" /><button class="password-toggle" type="button" data-password-toggle="resetConfirm" aria-label="Show password" aria-pressed="false"><span class="password-eye" aria-hidden="true"></span></button></div></label>
+          <div class="modal-actions"><button type="button" class="button button-secondary" data-close="resetModal">Cancel</button><button class="button button-primary" type="submit">Reset password</button></div>
+        </div>
+        <div id="resetDone" class="hidden">
+          <p class="modal-description">Password reset — signed in. Save this new recovery code.</p>
+          <div class="recovery-code" id="resetNewCode"></div>
+          <div class="modal-actions"><button type="button" id="resetDoneButton" class="button button-primary">Continue</button></div>
+        </div>
+        <div id="resetError" class="form-error"></div>
       </form>
     </div>
 

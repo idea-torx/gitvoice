@@ -121,15 +121,24 @@ const EMPTY_ADMIN_STATE: AdminState = {
 };
 
 export async function getAdminState(db: D1Database): Promise<AdminState> {
-  const row = await db.prepare("SELECT value FROM settings WHERE key = 'admin'").first<{ value: string }>();
-  return row ? parseJson(row.value, EMPTY_ADMIN_STATE) : EMPTY_ADMIN_STATE;
+  try {
+    const row = await db.prepare("SELECT onboarded, password_hash, password_salt, recovery_hash, recovery_salt, setup_at FROM admin_state WHERE id = 'singleton'").first<{ onboarded: number; password_hash: string; password_salt: string; recovery_hash: string; recovery_salt: string; setup_at: string }>();
+    if (row) return { onboarded: row.onboarded === 1, passwordHash: row.password_hash || "", passwordSalt: row.password_salt || "", recoveryHash: row.recovery_hash || "", recoverySalt: row.recovery_salt || "", setupAt: row.setup_at || "" };
+  } catch {}
+  const legacy = await db.prepare("SELECT value FROM settings WHERE key = 'admin'").first<{ value: string }>();
+  return legacy ? parseJson(legacy.value, EMPTY_ADMIN_STATE) : EMPTY_ADMIN_STATE;
 }
 
 export async function saveAdminState(db: D1Database, state: AdminState): Promise<void> {
-  await db
-    .prepare("INSERT INTO settings (key, value, updated_at) VALUES ('admin', ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at")
-    .bind(JSON.stringify(state))
-    .run();
+  const legacy = JSON.stringify(state);
+  await db.prepare("INSERT INTO settings (key, value, updated_at) VALUES ('admin', ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at").bind(legacy).run();
+  try {
+    await db.prepare(`INSERT INTO admin_state (id, onboarded, password_hash, password_salt, recovery_hash, recovery_salt, setup_at, updated_at)
+      VALUES ('singleton', ?, ?, ?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(id) DO UPDATE SET onboarded=excluded.onboarded, password_hash=excluded.password_hash, password_salt=excluded.password_salt, recovery_hash=excluded.recovery_hash, recovery_salt=excluded.recovery_salt, setup_at=excluded.setup_at, updated_at=datetime('now')`)
+      .bind(state.onboarded ? 1 : 0, state.passwordHash, state.passwordSalt, state.recoveryHash, state.recoverySalt, state.setupAt).run();
+  } catch {}
+  // Best-effort R2 backup marker is handled in scheduled(); no blocking write here.
 }
 
 export async function listClients(db: D1Database, includeInactive = true): Promise<Client[]> {

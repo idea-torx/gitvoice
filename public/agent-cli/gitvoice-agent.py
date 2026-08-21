@@ -529,6 +529,16 @@ def cmd_operators(args):
     status, data = request(args.base, "/api/operators", token=token)
     print(json.dumps(data or {"status": status}, indent=2))
 
+
+def cmd_reset_password(args):
+    base = args.base
+    # Use adminToken directly without prior auth
+    token = args.admin_token or keychain_secret()
+    status, data = request(base, "/api/auth/reset", method="POST", payload={"adminToken": token, "password": args.new_password})
+    if status != 200:
+        die(f"reset failed (HTTP {status}): {data}")
+    print(json.dumps({"ok": True, "recoveryCode": data.get("recoveryCode"), "token": bool(data.get("token"))}, indent=2))
+
 def main():
     p = argparse.ArgumentParser(description="Gitvoice agent CLI")
     p.add_argument("--base", default=DEFAULT_BASE, help="worker base URL (default: prod)")
@@ -584,6 +594,9 @@ def main():
     vo = sub.add_parser("void")
     vo.add_argument("--id", required=True)
 
+    rp = sub.add_parser("reset-password")
+    rp.add_argument("--admin-token")
+    rp.add_argument("--new-password", required=True)
     re = sub.add_parser("reissue")
     re.add_argument("--id", required=True)
 
@@ -637,6 +650,7 @@ def main():
           "portal-clients": cmd_portal_clients, "portal-login": cmd_portal_login,
           "portal-invoices": cmd_portal_invoices,
           "watch": cmd_watch, "bulk-import": cmd_bulk_import, "discover": cmd_discover,
+          "reset-password": cmd_reset_password,
           "void": cmd_void, "reissue": cmd_reissue, "time-import": cmd_time_import,
           "operators": cmd_operators}[args.cmd]
     fn(args)

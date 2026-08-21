@@ -1,4 +1,11 @@
-const state = { token: sessionStorage.getItem("gitvoice_token") || "", status: null, mode: "login", setup: null, recoveryCode: "", clients: [], provider: null, invoices: [], preview: null, previewKey: "", previewRequest: null, source: "github", openInvoiceId: null };
+function getStoredToken(){
+  try{ const v=localStorage.getItem("gitvoice_token"); if(v) return v; }catch{}
+  try{ const v=sessionStorage.getItem("gitvoice_token"); if(v){ try{ localStorage.setItem("gitvoice_token",v);}catch{} return v; }}catch{}
+  return "";
+}
+function setStoredToken(v){ try{ localStorage.setItem("gitvoice_token",v);}catch{} try{ sessionStorage.setItem("gitvoice_token",v);}catch{} }
+function clearStoredToken(){ try{ localStorage.removeItem("gitvoice_token");}catch{} try{ sessionStorage.removeItem("gitvoice_token");}catch{} }
+const state = { token: getStoredToken(), status: null, mode: "login", setup: null, recoveryCode: "", clients: [], provider: null, invoices: [], preview: null, previewKey: "", previewRequest: null, source: "github", openInvoiceId: null };
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
@@ -19,10 +26,13 @@ function bindEvents() {
   $("#authForm").addEventListener("submit", authenticate);
   $("#recoverLink").addEventListener("click", openRecoverModal);
   $("#recoverForm").addEventListener("submit", recoverAccess);
+  if($("#resetLink")) $("#resetLink").addEventListener("click", openResetModal);
+  if($("#resetForm")) $("#resetForm").addEventListener("submit", resetAccess);
+  if($("#resetDoneButton")) $("#resetDoneButton").addEventListener("click", () => { closeModal("resetModal"); renderAuthScreen(state.status || {}); });
   $("#recoverDoneButton").addEventListener("click", () => { closeModal("recoverModal"); renderAuthScreen(state.status || {}); });
   $("#setupForm").addEventListener("submit", handleSetupSubmit);
   $("#setupBack").addEventListener("click", () => stepSetup(-1));
-  $("#signOutButton").addEventListener("click", () => { sessionStorage.removeItem("gitvoice_token"); state.token = ""; state.status = null; initAuth(); });
+  $("#signOutButton").addEventListener("click", () => { clearStoredToken(); state.token = ""; state.status = null; initAuth(); });
   $("#generatorForm").addEventListener("submit", preview);
   $("#previewForm").addEventListener("submit", (event) => { event.preventDefault(); generateInvoice(); });
   $("#generatorClient").addEventListener("change", selectGeneratorClient);
@@ -58,7 +68,7 @@ function bindEvents() {
 async function connect() {
   try {
     const data = await api("/api/bootstrap");
-    sessionStorage.setItem("gitvoice_token", state.token);
+    setStoredToken(state.token);
     state.clients = data.clients || [];
     state.provider = data.provider || {};
     state.invoices = data.invoices || [];
@@ -94,6 +104,7 @@ function renderAuthScreen(status) {
   const input = $("#tokenInput");
   const submit = $("#authSubmit");
   const recoverRow = $("#recoverLink").closest(".auth-hint");
+  const resetRow = $("#resetLink") ? $("#resetLink").closest(".auth-hint") : recoverRow;
   $("#authError").textContent = "";
   input.value = "";
   if (status.onboarded) {
@@ -105,6 +116,7 @@ function renderAuthScreen(status) {
     input.autocomplete = "current-password";
     submit.textContent = "Sign in";
     recoverRow.classList.remove("hidden");
+    if(resetRow) resetRow.classList.remove("hidden");
   } else if (status.local) {
     state.mode = "local-setup";
     title.textContent = "Set up Gitvoice";
@@ -139,7 +151,7 @@ async function authenticate(event) {
   try {
     const data = await api("/api/auth", { method: "POST", auth: false, body: { password: value } });
     state.token = data.token;
-    sessionStorage.setItem("gitvoice_token", state.token);
+    setStoredToken(state.token);
     if (data.requiresSetup) { openSetup(); }
     else { await connect(); }
   } catch (error) {
@@ -253,7 +265,7 @@ async function finishSetup() {
   try {
     const data = await api("/api/setup", { method: "POST", body: { password: s.password, provider: s.provider } });
     state.token = data.token;
-    sessionStorage.setItem("gitvoice_token", state.token);
+    setStoredToken(state.token);
     state.provider = data.provider;
     state.recoveryCode = data.recoveryCode;
     if (s.client && s.client.name) {
@@ -299,6 +311,38 @@ async function recoverAccess(event) {
     $("#recoverNewCode").textContent = data.recoveryCode;
   } catch (error) {
     $("#recoverError").textContent = error.message || "Could not reset password.";
+  }
+}
+
+function openResetModal(){
+  $("#resetToken").value = "";
+  $("#resetPassword").value = "";
+  $("#resetConfirm").value = "";
+  $("#resetError").textContent = "";
+  $("#resetFields").classList.remove("hidden");
+  $("#resetDone").classList.add("hidden");
+  $("#resetModal").classList.remove("hidden");
+  setTimeout(() => $("#resetToken").focus(), 0);
+}
+async function resetAccess(event){
+  event.preventDefault();
+  const token = $("#resetToken").value.trim();
+  const password = $("#resetPassword").value;
+  const confirm = $("#resetConfirm").value;
+  if(!token){ $("#resetError").textContent = "Enter your setup token."; return; }
+  if(password.length < 8){ $("#resetError").textContent = "Password must be at least 8 characters."; return; }
+  if(password !== confirm){ $("#resetError").textContent = "Passwords do not match."; return; }
+  $("#resetError").textContent = "";
+  try{
+    const data = await api("/api/auth/reset", { method: "POST", auth: false, body: { adminToken: token, password } });
+    state.token = data.token || "";
+    if(state.token) setStoredToken(state.token);
+    $("#resetFields").classList.add("hidden");
+    $("#resetDone").classList.remove("hidden");
+    $("#resetNewCode").textContent = data.recoveryCode || "";
+    if(state.token) setTimeout(()=> connect(), 800);
+  }catch(error){
+    $("#resetError").textContent = error.message || "Could not reset password.";
   }
 }
 
