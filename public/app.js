@@ -57,7 +57,7 @@ function bindEvents() {
   if($("#revenueButton")) $("#revenueButton").addEventListener("click", openRevenueModal);
   if($("#clientSearch")) { $("#clientSearch").addEventListener("input", ()=>{ const v=$("#clientSearch").value; const c=document.querySelector("[data-clear=\"clientSearch\"]"); if(c) c.classList.toggle("hidden", !v); renderClients(); }); }
   if($("#invoiceSearch")) { $("#invoiceSearch").addEventListener("input", ()=>{ const v=$("#invoiceSearch").value; const c=document.querySelector("[data-clear=\"invoiceSearch\"]"); if(c) c.classList.toggle("hidden", !v); renderInvoices(); }); }
-  if($("#invoiceStatusFilter")) $("#invoiceStatusFilter").addEventListener("change", renderInvoices);
+  if($("#invoiceStatusFilter")) $("#invoiceStatusFilter").addEventListener("change", ()=>{ renderInvoices(); updateSearchPreview(); });
   document.querySelectorAll("[data-clear]").forEach(btn=> btn.addEventListener("click", ()=>{ const id=btn.dataset.clear; const el=document.getElementById(id); if(el){ el.value=""; el.dispatchEvent(new Event("input")); btn.classList.add("hidden"); } }));
   if($("#changePasswordButton")) $("#changePasswordButton").addEventListener("click", openChangePasswordModal);
   if($("#changePasswordForm")) $("#changePasswordForm").addEventListener("submit", changePassword);
@@ -707,6 +707,36 @@ function renderSparkline(){
   // Small sparkline no longer in DOM, so nothing to render there
 }
 function openRevenueModal(){ renderSparkline(); document.getElementById("revenueModal")?.classList.remove("hidden"); }
+
+
+function updateSearchPreview(){
+  const cq = ($("#clientSearch")?.value || "").trim().toLowerCase();
+  const cRes = document.getElementById("clientSearchResults");
+  if(cRes){
+    if(!cq){ cRes.style.display="none"; cRes.innerHTML=""; }
+    else {
+      const filtered = state.clients.filter(c => `${c.name} ${c.email} ${c.githubRepos.join(" ")} ${c.billingModel}`.toLowerCase().includes(cq));
+      cRes.style.display="block";
+      cRes.innerHTML = filtered.length ? filtered.slice(0,8).map(c=> `<div style="padding:8px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center"><span><strong>${esc(c.name)}</strong><br/><span class="muted" style="font-size:12px">${esc(c.email)} · ${c.githubRepos.length} repos</span></span><button class="button button-secondary" style="font-size:12px;padding:4px 8px" data-id="${c.id}">Edit</button></div>`).join("") : `<div style="padding:12px" class="muted">No clients match “${esc(cq)}”.</div>`;
+      // Fix the onclick to work: we need to actually bind after rendering
+      setTimeout(()=>{ cRes.querySelectorAll("button[data-id]").forEach(btn=> btn.onclick=()=>{ const c=state.clients.find(x=>x.id===btn.dataset.id); if(c){ closeModal("clientSearchModal"); openClientModal(c); } }); },0);
+    }
+  }
+  const iq = ($("#invoiceSearch")?.value || "").trim().toLowerCase();
+  const statusFilter = $("#invoiceStatusFilter")?.value || "";
+  const iRes = document.getElementById("invoiceSearchResults");
+  if(iRes){
+    if(!iq && !statusFilter){ iRes.style.display="none"; iRes.innerHTML=""; }
+    else {
+      let filtered = state.invoices;
+      if(iq) filtered = filtered.filter(inv => `${inv.number} ${inv.client.name} ${inv.periodStart} ${inv.status}`.toLowerCase().includes(iq));
+      if(statusFilter){ if(statusFilter==="disputed") filtered=filtered.filter(inv=>!!inv.dispute); else filtered=filtered.filter(inv=>inv.status===statusFilter); }
+      iRes.style.display="block";
+      iRes.innerHTML = filtered.length ? filtered.slice(0,8).map(inv=> `<div style="padding:8px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center"><span><strong>${esc(inv.number)}</strong> · ${esc(inv.client.name)}<br/><span class="muted" style="font-size:12px">${inv.periodStart} → ${inv.periodEnd} · ${esc(inv.status)}</span></span><button class="button button-secondary" style="font-size:12px;padding:4px 8px" data-id="${inv.id}">View</button></div>`).join("") : `<div style="padding:12px" class="muted">No invoices match.</div>`;
+      setTimeout(()=>{ iRes.querySelectorAll("button[data-id]").forEach(btn=> btn.onclick=()=>{ closeModal("invoiceSearchModal"); openInvoiceModal(btn.dataset.id); }); },0);
+    }
+  }
+}
 
 function openBulkModal(){ $("#bulkJson").value=""; $("#bulkError").textContent=""; $("#bulkPreview").textContent=""; $("#bulkModal").classList.remove("hidden"); $("#bulkJson").focus(); }
 async function submitBulk(event){

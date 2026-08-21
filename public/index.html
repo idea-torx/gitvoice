@@ -151,7 +151,7 @@
           <div class="panel-heading">
             <div><h2>Clients</h2><p>Billing models, repositories, and portal access.</p></div>
             <div class="panel-actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-              <input id="clientSearch" placeholder="Search clients…" style="border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:13px;width:150px;flex:1;min-width:120px;max-width:180px" />
+              <button id="clientSearchButton" class="icon-button" type="button" aria-label="Search clients" aria-haspopup="dialog" style="width:32px;height:32px;border:1px solid var(--line-strong);border-radius:999px;background:var(--surface);display:grid;place-items:center"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width:14px;height:14px;color:var(--muted)"><circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2L13 13"/></svg></button>
               <button id="bulkButton" class="button button-secondary" type="button">Bulk import</button>
               <button id="discoverButton" class="button button-secondary" type="button">Discover</button>
               <span id="clientCount" class="count-badge"></span>
@@ -169,7 +169,7 @@
         <div class="panel-heading" style="flex-wrap:wrap;gap:12px">
           <div><h2>Recent invoices</h2><p>Generated documents — void, reissue, edit, versions.</p></div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <input id="invoiceSearch" placeholder="Search invoices…" style="border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:13px;width:150px" />
+            <button id="invoiceSearchButton" class="icon-button" type="button" aria-label="Search invoices" aria-haspopup="dialog" style="width:32px;height:32px;border:1px solid var(--line-strong);border-radius:999px;background:var(--surface);display:grid;place-items:center"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width:14px;height:14px;color:var(--muted)"><circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2L13 13"/></svg></button>
             <select id="invoiceStatusFilter" style="border:1px solid var(--line);border-radius:999px;padding:6px 10px;font-size:13px"><option value="">All status</option><option value="generated">Generated</option><option value="paid">Paid</option><option value="void">Void</option><option value="disputed">Disputed</option></select>
           </div>
           <span id="archiveCount" class="count-badge">0 invoices</span>
@@ -351,6 +351,30 @@
         </div>
         <div id="resetError" class="form-error"></div>
       </form>
+    </div>
+
+
+    <div id="clientSearchModal" class="modal-backdrop hidden">
+      <div class="modal-card" style="max-width:520px">
+        <div class="modal-heading"><div><p class="section-label">Clients</p><h2>Search clients</h2></div><button type="button" class="close-button" data-close="clientSearchModal" aria-label="Close search">×</button></div>
+        <label class="field"><span>Search</span><div class="search-field" style="max-width:none"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2L13 13"/></svg><input id="clientSearch" placeholder="Name, email, repo, billing model…" autocomplete="off" /><button type="button" class="search-clear hidden" data-clear="clientSearch" aria-label="Clear">×</button></div></label>
+        <div id="clientSearchResults" style="margin-top:12px;max-height:300px;overflow:auto;border:1px solid var(--line);border-radius:12px;display:none"></div>
+        <p class="muted" style="font-size:12px;margin-top:8px">Live filters the Clients list — also filters as you type on the page.</p>
+        <div class="modal-actions"><button type="button" class="button button-secondary" data-close="clientSearchModal">Close</button></div>
+      </div>
+    </div>
+
+    <div id="invoiceSearchModal" class="modal-backdrop hidden">
+      <div class="modal-card" style="max-width:560px">
+        <div class="modal-heading"><div><p class="section-label">Invoices</p><h2>Search invoices</h2></div><button type="button" class="close-button" data-close="invoiceSearchModal" aria-label="Close search">×</button></div>
+        <div class="field-row" style="gap:12px">
+          <label class="field" style="flex:1"><span>Search</span><div class="search-field" style="max-width:none"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2L13 13"/></svg><input id="invoiceSearch" placeholder="Number, client, period, status…" autocomplete="off" /><button type="button" class="search-clear hidden" data-clear="invoiceSearch" aria-label="Clear">×</button></div></label>
+          <label class="field" style="width:140px"><span>Status</span><select id="invoiceStatusFilter" style="border:1px solid var(--line);border-radius:10px;padding:8px 10px;font-size:13px;width:100%"><option value="">All status</option><option value="generated">Generated</option><option value="paid">Paid</option><option value="void">Void</option><option value="disputed">Disputed</option></select></label>
+        </div>
+        <div id="invoiceSearchResults" style="margin-top:12px;max-height:300px;overflow:auto;border:1px solid var(--line);border-radius:12px;display:none"></div>
+        <p class="muted" style="font-size:12px;margin-top:8px">Filters the Recent invoices list below.</p>
+        <div class="modal-actions"><button type="button" class="button button-secondary" data-close="invoiceSearchModal">Close</button></div>
+      </div>
     </div>
 
     <div id="revenueModal" class="modal-backdrop hidden">
