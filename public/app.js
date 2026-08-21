@@ -54,6 +54,8 @@ function bindEvents() {
   if($("#invoiceEditForm")) $("#invoiceEditForm").addEventListener("submit", submitInvoiceEdit);
   if($("#operatorForm")) $("#operatorForm").addEventListener("submit", createOperatorSubmit);
   if($("#newOperatorButton")) $("#newOperatorButton").addEventListener("click", () => { $("#operatorModal").classList.remove("hidden"); $("#operatorName").focus(); });
+  if($("#clientSearchButton")) $("#clientSearchButton").addEventListener("click", ()=>{ document.getElementById("clientSearchModal")?.classList.remove("hidden"); setTimeout(()=> document.getElementById("clientSearch")?.focus(), 0); updateSearchPreview(); });
+  if($("#invoiceSearchButton")) $("#invoiceSearchButton").addEventListener("click", ()=>{ document.getElementById("invoiceSearchModal")?.classList.remove("hidden"); setTimeout(()=> document.getElementById("invoiceSearch")?.focus(), 0); updateSearchPreview(); });
   if($("#revenueButton")) $("#revenueButton").addEventListener("click", openRevenueModal);
   if($("#clientSearch")) { $("#clientSearch").addEventListener("input", ()=>{ const v=$("#clientSearch").value; const c=document.querySelector("[data-clear=\"clientSearch\"]"); if(c) c.classList.toggle("hidden", !v); renderClients(); }); }
   if($("#invoiceSearch")) { $("#invoiceSearch").addEventListener("input", ()=>{ const v=$("#invoiceSearch").value; const c=document.querySelector("[data-clear=\"invoiceSearch\"]"); if(c) c.classList.toggle("hidden", !v); renderInvoices(); }); }
