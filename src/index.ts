@@ -1,5 +1,6 @@
 import { collectGithubActivity, emptyActivity } from "./github";
 import { formatMoney, renderInvoiceHtml } from "./invoice";
+import { EmailMessage } from "cloudflare:email";
 import {
   bulkUpsertClients,
   createInvoiceRow,
@@ -912,20 +913,17 @@ async function sendInvoiceEmail(env: Env, invoice: InvoiceRecord): Promise<{ sen
   </body></html>`;
   const text = `${invoice.provider.businessName} — Invoice ${invoice.number}\nClient: ${invoice.client.name}\nPeriod: ${invoice.periodStart} → ${invoice.periodEnd}\nTotal: ${formatMoney(invoice.totalCents, invoice.currency)}\nView: ${invoiceUrl}\nPortal: ${portalUrl}`;
   try {
-    const EmailMessageCtor = (globalThis as unknown as { EmailMessage?: new (from: string, to: string, data: string) => unknown }).EmailMessage;
-    if (!EmailMessageCtor) return { sent: false, reason: "EmailMessage not available in this runtime" };
-    const msg = new EmailMessageCtor(from, to, `From: ${from}\r\nTo: ${to}\r\nSubject: ${subject}\r\nContent-Type: text/html; charset=utf-8\r\n\r\n${html}`);
-    // Some runtimes want HTML as raw; fallback to fetch-based send if EmailMessage fails
+    const msg = new EmailMessage(from, to, `From: ${from}\r\nTo: ${to}\r\nSubject: ${subject}\r\nContent-Type: text/html; charset=utf-8\r\n\r\n${html}`);
     await (env.EMAIL as unknown as { send: (m: unknown) => Promise<void> }).send(msg);
     return { sent: true };
   } catch (e) {
-    // Fallback: try raw text via EmailMessage string
+    console.error("Email send failed", e);
+    // Try text fallback via same EmailMessage
     try {
-      const msg2 = new (globalThis as unknown as { EmailMessage: new (from: string, to: string, data: string) => unknown }).EmailMessage(from, to, text);
+      const msg2 = new EmailMessage(from, to, text);
       await (env.EMAIL as unknown as { send: (m: unknown) => Promise<void> }).send(msg2);
       return { sent: true };
     } catch (e2) {
-      console.error("Email send failed", e2);
       return { sent: false, reason: e2 instanceof Error ? e2.message : String(e2) };
     }
   }
