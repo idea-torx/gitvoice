@@ -45,6 +45,15 @@ function bindEvents() {
   $("#brandLogoButton").addEventListener("click", openBrandModal);
   $("#brandForm").addEventListener("submit", saveBrandLogo);
   $("#brandRemoveButton").addEventListener("click", removeBrandLogo);
+  if($("#bulkButton")) $("#bulkButton").addEventListener("click", openBulkModal);
+  if($("#bulkForm")) $("#bulkForm").addEventListener("submit", submitBulk);
+  if($("#discoverButton")) $("#discoverButton").addEventListener("click", openDiscoverModal);
+  if($("#discoverForm")) $("#discoverForm").addEventListener("submit", submitDiscover);
+  if($("#timeImportButton")) $("#timeImportButton").addEventListener("click", openTimeModal);
+  if($("#timeForm")) $("#timeForm").addEventListener("submit", submitTime);
+  if($("#invoiceEditForm")) $("#invoiceEditForm").addEventListener("submit", submitInvoiceEdit);
+  if($("#operatorForm")) $("#operatorForm").addEventListener("submit", createOperatorSubmit);
+  if($("#newOperatorButton")) $("#newOperatorButton").addEventListener("click", () => { $("#operatorModal").classList.remove("hidden"); $("#operatorName").focus(); });
   if($("#changePasswordButton")) $("#changePasswordButton").addEventListener("click", openChangePasswordModal);
   if($("#changePasswordForm")) $("#changePasswordForm").addEventListener("submit", changePassword);
   if($("#changePasswordDoneButton")) $("#changePasswordDoneButton").addEventListener("click", () => { closeModal("changePasswordModal"); });
@@ -622,10 +631,114 @@ function renderInvoices() {
     root.innerHTML = `<div class="empty-state"><span>⌁</span><p>Generated invoices will land here.</p></div>`;
     return;
   }
-  root.innerHTML = state.invoices.slice(0, 12).map((invoice) => `<article class="invoice-row"><div><div class="invoice-number">${esc(invoice.number)}</div><div class="invoice-client">${esc(invoice.client.name)}</div></div><div class="invoice-period">${formatDate(invoice.periodStart)} - ${formatDate(invoice.periodEnd)}</div><div><div class="invoice-total">${formatMoney(invoice.totalCents, invoice.currency)}</div><div class="invoice-status ${invoice.dispute ? "invoice-status-disputed" : ""}">${invoice.dispute ? "Disputed" : esc(invoice.status || "generated")}</div></div><div class="invoice-actions"><button class="invoice-open" type="button" data-open-invoice="${esc(invoice.id)}">View</button><a class="invoice-download" href="/api/invoices/${encodeURIComponent(invoice.id)}/pdf?token=${encodeURIComponent(state.token)}" download>PDF ↓</a><button class="invoice-delete" type="button" data-delete-invoice="${esc(invoice.id)}" aria-label="Delete ${esc(invoice.number)}">Delete</button></div></article>`).join("");
+  root.innerHTML = state.invoices.slice(0, 12).map((invoice) => {
+    const isVoid = invoice.status === 'void';
+    const versionBadge = invoice.version && invoice.version > 1 ? `<span class="muted" style="font-size:11px">v${invoice.version}</span>` : '';
+    return `<article class="invoice-row"><div><div class="invoice-number">${esc(invoice.number)} ${versionBadge}</div><div class="invoice-client">${esc(invoice.client.name)}</div></div><div class="invoice-period">${formatDate(invoice.periodStart)} - ${formatDate(invoice.periodEnd)}</div><div><div class="invoice-total">${formatMoney(invoice.totalCents, invoice.currency)}</div><div class="invoice-status ${invoice.dispute ? "invoice-status-disputed" : (isVoid?"invoice-status-void":"")}">${isVoid ? "Void" : invoice.dispute ? "Disputed" : esc(invoice.status || "generated")}</div></div><div class="invoice-actions" style="flex-wrap:wrap;gap:6px"><button class="invoice-open" type="button" data-open-invoice="${esc(invoice.id)}">View</button><button type="button" data-edit-invoice="${esc(invoice.id)}">Edit</button><button type="button" data-versions-invoice="${esc(invoice.id)}">Versions</button>${isVoid ? `<button type="button" data-reissue-invoice="${esc(invoice.id)}">Reissue</button>` : `<button type="button" data-void-invoice="${esc(invoice.id)}">Void</button>`}<a class="invoice-download" href="/api/invoices/${encodeURIComponent(invoice.id)}/pdf?token=${encodeURIComponent(state.token)}" download>PDF ↓</a><button class="invoice-delete" type="button" data-delete-invoice="${esc(invoice.id)}" aria-label="Delete ${esc(invoice.number)}">Delete</button></div></article>`;
+  }).join("");
   $$('[data-open-invoice]').forEach((button) => button.addEventListener("click", () => openInvoiceModal(button.dataset.openInvoice)));
   $$('[data-delete-invoice]').forEach((button) => button.addEventListener("click", () => deleteInvoice(button.dataset.deleteInvoice, button)));
+  $$('[data-void-invoice]').forEach((button) => button.addEventListener("click", () => voidInvoiceAction(button.dataset.voidInvoice)));
+  $$('[data-reissue-invoice]').forEach((button) => button.addEventListener("click", () => reissueInvoiceAction(button.dataset.reissueInvoice)));
+  $$('[data-edit-invoice]').forEach((button) => button.addEventListener("click", () => openInvoiceEditModal(button.dataset.editInvoice)));
+  $$('[data-versions-invoice]').forEach((button) => button.addEventListener("click", () => openVersionsModal(button.dataset.versionsInvoice)));
 }
+
+
+function openBulkModal(){ $("#bulkJson").value=""; $("#bulkError").textContent=""; $("#bulkPreview").textContent=""; $("#bulkModal").classList.remove("hidden"); $("#bulkJson").focus(); }
+async function submitBulk(event){
+  event.preventDefault();
+  let parsed; try{ parsed = JSON.parse($("#bulkJson").value); }catch(e){ $("#bulkError").textContent="Invalid JSON: "+e.message; return; }
+  const clients = Array.isArray(parsed)? parsed : parsed.clients || [];
+  if(!clients.length){ $("#bulkError").textContent="Provide a JSON array of clients."; return; }
+  $("#bulkError").textContent="Importing…";
+  try{
+    const data = await api("/api/clients/bulk", {method:"POST", body:{clients}});
+    $("#bulkError").textContent="";
+    $("#bulkPreview").textContent = `Imported ${data.clients?.length||0}, errors ${data.errors?.length||0}` + (data.errors?.length? "\n"+JSON.stringify(data.errors,null,2):"");
+    if(data.clients?.length){ await refreshClients(); toast(`Bulk imported ${data.clients.length}`); }
+  }catch(e){ $("#bulkError").textContent=e.message||"Bulk failed"; }
+}
+function openDiscoverModal(){ $("#discoverQuery").value=""; $("#discoverResults").style.display="none"; $("#discoverResults").innerHTML=""; $("#discoverError").textContent=""; $("#discoverModal").classList.remove("hidden"); $("#discoverQuery").focus(); }
+async function submitDiscover(event){
+  event.preventDefault();
+  const q=$("#discoverQuery").value.trim(); if(!q) return;
+  $("#discoverError").textContent="Discovering…";
+  try{
+    const data = await api("/api/clients/discover", {method:"POST", body:{query:q}});
+    const repos=data.repos||[];
+    const el=$("#discoverResults"); el.style.display="block";
+    if(!repos.length){ el.innerHTML=`<span class="muted">No repos found for "${esc(q)}"</span>`; }
+    else {
+      el.innerHTML = repos.slice(0,30).map(r=> `<label style="display:flex;gap:8px;padding:6px;border-bottom:1px solid var(--line);font-size:13px"><input type="checkbox" value="${esc(r)}" class="discover-check" /> ${esc(r)}</label>`).join("") + `<div style="margin-top:8px;display:flex;gap:8px"><button type="button" class="button button-primary" id="discoverAdd">Add selected to new client</button></div>`;
+      $("#discoverAdd").onclick = async ()=>{
+        const selected=[...el.querySelectorAll(".discover-check:checked")].map(c=>c.value);
+        if(!selected.length){ toast("Select at least one repo"); return; }
+        const name=prompt("Client name for "+selected.length+" repos:"); if(!name) return;
+        try{ await api("/api/clients",{method:"POST", body:{name, email:"", address:"", githubRepos:selected, githubAuthor:"", currency:"USD", billingModel:"flat", paymentMethod:"wire", paymentTerms:"Due on receipt"}}); toast("Client created"); closeModal("discoverModal"); await refreshClients(); }catch(e){ toast(e.message); }
+      };
+    }
+    $("#discoverError").textContent="";
+  }catch(e){ $("#discoverError").textContent=e.message; }
+}
+function openTimeModal(){
+  const clientId=$("#clientId").value;
+  if(!clientId){ toast("Save client first"); return; }
+  $("#timeJson").value='[{"date":"'+new Date().toISOString().slice(0,10)+'","hours":2,"description":"Work"}]';
+  $("#timeError").textContent="";
+  $("#timeModal").classList.remove("hidden");
+}
+async function submitTime(event){
+  event.preventDefault();
+  const clientId=$("#clientId").value; if(!clientId){ $("#timeError").textContent="No client"; return; }
+  let entries; try{ entries=JSON.parse($("#timeJson").value); }catch(e){ $("#timeError").textContent="Invalid JSON"; return; }
+  if(!Array.isArray(entries)) entries=entries.entries||[];
+  try{ const data=await api(`/api/clients/${encodeURIComponent(clientId)}/time/import`,{method:"POST", body:{entries}}); toast(`Imported ${data.imported||0} entries`); closeModal("timeModal"); loadClientTime(clientId); }catch(e){ $("#timeError").textContent=e.message; }
+}
+async function voidInvoiceAction(id){
+  if(!confirm("Void "+id+"?")) return;
+  try{ await api(`/api/invoices/${encodeURIComponent(id)}/void`,{method:"POST"}); toast("Voided"); await refreshInvoices(); }catch(e){ toast(e.message); }
+}
+async function reissueInvoiceAction(id){
+  try{ await api(`/api/invoices/${encodeURIComponent(id)}/reissue`,{method:"POST"}); toast("Reissued"); await refreshInvoices(); }catch(e){ toast(e.message); }
+}
+function openInvoiceEditModal(id){
+  const inv=state.invoices.find(i=>i.id===id); if(!inv) return toast("Invoice not found");
+  $("#invoiceEditForm").dataset.invoiceId=id;
+  $("#editTitle").value=inv.summary.title||"";
+  $("#editOverview").value=inv.summary.overview||"";
+  $("#editHighlights").value=(inv.summary.highlights||[]).join("\n");
+  $("#editDeliverables").value=(inv.summary.deliverables||[]).join("\n");
+  $("#editTimeline").value=JSON.stringify(inv.summary.timeline||[],null,2);
+  $("#editError").textContent="";
+  $("#invoiceEditModal").classList.remove("hidden");
+}
+async function submitInvoiceEdit(event){
+  event.preventDefault();
+  const id=$("#invoiceEditForm").dataset.invoiceId; if(!id) return;
+  let timeline; try{ timeline=$("#editTimeline").value.trim()? JSON.parse($("#editTimeline").value): undefined; }catch(e){ $("#editError").textContent="Invalid timeline JSON"; return; }
+  const payload={ title:$("#editTitle").value.trim()||undefined, overview:$("#editOverview").value.trim()||undefined, highlights:$("#editHighlights").value.split("\n").map(s=>s.trim()).filter(Boolean), deliverables:$("#editDeliverables").value.split("\n").map(s=>s.trim()).filter(Boolean) };
+  if(timeline) payload.timeline=timeline;
+  try{ await api(`/api/invoices/${encodeURIComponent(id)}/summary`,{method:"PATCH", body:payload}); toast("Invoice updated"); closeModal("invoiceEditModal"); await refreshInvoices(); }catch(e){ $("#editError").textContent=e.message; }
+}
+async function openVersionsModal(id){
+  $("#versionsList").innerHTML=`<span class="muted">Loading…</span>`;
+  $("#versionsModal").classList.remove("hidden");
+  try{ const data=await api(`/api/invoices/${encodeURIComponent(id)}/versions`); const v=data.versions||[]; if(!v.length) $("#versionsList").innerHTML=`<span class="muted">No prior versions.</span>`; else $("#versionsList").innerHTML=v.map(x=> `<div style="padding:6px;border-bottom:1px solid var(--line);font-size:13px"><strong>v${x.version}</strong> · ${esc(x.status)} · ${esc(x.createdAt||"")}</div>`).join(""); }catch(e){ $("#versionsList").innerHTML=`<span class="muted">${esc(e.message)}</span>`; }
+}
+async function refreshClients(){ try{ const d=await api("/api/bootstrap"); state.clients=d.clients||[]; renderClients(); }catch{} }
+async function refreshInvoices(){ try{ const d=await api("/api/bootstrap"); state.invoices=d.invoices||[]; renderInvoices(); updateStats(); }catch{} }
+async function loadOperators(){
+  const el=$("#operatorList"); if(!el) return;
+  try{ const d=await api("/api/operators"); const ops=d.operators||[]; if(!ops.length) el.innerHTML=`<span class="muted" style="font-size:12px">No operators yet.</span>`; else el.innerHTML=ops.map(o=> `<div style="display:flex;justify-content:space-between;padding:6px;border-bottom:1px solid var(--line);font-size:13px"><span>${esc(o.name)} <span class="muted">${esc(o.role)}</span></span><span class="muted">${esc(o.createdAt||"").slice(0,10)}</span></div>`).join(""); }catch(e){ el.innerHTML=`<span class="muted">${esc(e.message)}</span>`; }
+}
+async function createOperatorSubmit(event){
+  event.preventDefault();
+  const name=$("#operatorName").value.trim(); if(!name) return;
+  const role=$("#operatorRole").value; const token=$("#operatorToken").value.trim()||undefined;
+  try{ const data=await api("/api/operators",{method:"POST", body:{name, role, token}}); $("#operatorResult").textContent=`Created ${data.operator.name} — token: ${data.operator.token} — save it now!`; loadOperators(); }catch(e){ $("#operatorError").textContent=e.message; }
+}
+
 
 function openInvoiceModal(id) {
   const invoice = state.invoices.find((item) => item.id === id);
@@ -798,6 +911,17 @@ function populateClientSelect() {
   updatePricingFields();
 }
 
+async function loadClientTime(clientId){
+  const el = $("#clientTimeList");
+  if(!el) return;
+  el.innerHTML = `<span class="muted">Loading…</span>`;
+  try{
+    const data = await api(`/api/clients/${encodeURIComponent(clientId)}/time`);
+    const entries = data.entries || [];
+    if(!entries.length){ el.innerHTML = `<span class="muted">No time entries yet.</span>`; return; }
+    el.innerHTML = entries.slice(0,8).map(e=> `<div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--line);padding:4px 0"><span>${esc(e.date)} · ${esc(e.description||'')}</span><strong>${Number(e.hours).toFixed(2)}h</strong></div>`).join("") + (entries.length>8? `<div class="muted">+${entries.length-8} more</div>`:"");
+  }catch{ el.innerHTML = `<span class="muted">Could not load time.</span>`; }
+}
 function openClientModal(client) {
   $("#clientModalTitle").textContent = client ? "Edit client" : "Add a client";
   $("#clientId").value = client?.id || "";
@@ -822,6 +946,7 @@ function openClientModal(client) {
   $("#clientError").textContent = "";
   syncAllStyledSelects();
   $("#clientModal").classList.remove("hidden");
+  if(client && client.id) loadClientTime(client.id); else { const tl=$("#clientTimeList"); if(tl) tl.innerHTML=`<span class=\"muted\">Save client first, then import time.</span>`; }
 }
 
 async function saveClient(event) {
@@ -915,6 +1040,7 @@ async function removeClient(id) {
 }
 
 function openSettingsModal() {
+  setTimeout(loadOperators, 0);
   const provider = state.provider || {};
   $("#providerBusiness").value = provider.businessName || "";
   $("#providerLogo").value = provider.logoUrl || "";

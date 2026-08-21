@@ -146,7 +146,11 @@
         <section class="panel clients-panel">
           <div class="panel-heading">
             <div><h2>Clients</h2><p>Billing models, repositories, and portal access.</p></div>
-            <span id="clientCount" class="count-badge"></span>
+            <div class="panel-actions" style="display:flex;gap:8px;align-items:center">
+              <button id="bulkButton" class="button button-secondary" type="button">Bulk import</button>
+              <button id="discoverButton" class="button button-secondary" type="button">Discover</button>
+              <span id="clientCount" class="count-badge"></span>
+            </div>
           </div>
           <div id="clientList" class="client-list"><div class="loading-line"></div><div class="loading-line short"></div></div>
           <div class="panel-footer">
@@ -158,7 +162,7 @@
 
       <section class="panel invoices-panel">
         <div class="panel-heading">
-          <div><h2>Recent invoices</h2><p>Generated documents and billing history.</p></div>
+          <div><h2>Recent invoices</h2><p>Generated documents — void, reissue, edit, versions.</p></div>
           <span id="archiveCount" class="count-badge">0 invoices</span>
         </div>
         <div id="invoiceList" class="invoice-list"><div class="empty-state"><span class="empty-icon">⌁</span><p>Generated invoices will appear here.</p></div></div>
@@ -205,6 +209,11 @@
           <div class="form-section-heading"><h3>Client portal</h3><p>Assign one password for this client’s invoice archive.</p></div>
         <label class="field"><span>Portal password</span><div class="secret-input"><input id="clientPortalPassword" type="password" autocomplete="new-password" placeholder="Set a client password" /><button class="password-toggle" type="button" data-password-toggle="clientPortalPassword" aria-label="Show client portal password" aria-pressed="false"><span class="password-eye" aria-hidden="true"></span></button></div><small>Leave blank while editing to keep the current password.</small></label>
         </div>
+        <div class="form-section" style="border-top:1px solid var(--line);padding-top:16px;margin-top:8px">
+          <div class="form-section-heading" style="display:flex;justify-content:space-between;align-items:center"><h3>Time entries</h3><button id="timeImportButton" class="button button-secondary" type="button" style="font-size:12px;padding:6px 10px">Import time</button></div>
+          <div id="clientTimeList" class="client-time-list" style="margin-top:8px;max-height:120px;overflow:auto;font-size:12px;color:var(--muted)"><span class="muted">No time entries yet.</span></div>
+          <small>Import Harvest/Toggl CSV or JSON — hours appear as evidence alongside commits.</small>
+        </div>
         <label class="field"><span>Special terms</span><textarea id="clientTerms" rows="2" placeholder="Retainer details or client-specific notes."></textarea></label>
         <div class="modal-actions"><button type="button" class="button button-secondary" data-close="clientModal">Cancel</button><button class="button button-primary" type="submit">Save client</button></div>
         <div id="clientError" class="form-error"></div>
@@ -222,6 +231,18 @@
         <div class="field-row"><label class="field"><span>Email</span><input id="providerEmail" type="email" /></label><label class="field"><span>Website</span><input id="providerWebsite" /></label></div>
         <label class="field"><span>Tax ID <small>Optional</small></span><input id="providerTaxId" /></label>
         <label class="field"><span>Alternative payment instructions</span><textarea id="providerRemittance" rows="4" placeholder="Optional payment link or alternative instructions"></textarea><small>E-transfer invoices use your provider email automatically. Wire details stay private and are available on request.</small></label>
+        <div class="form-section" style="border-top:1px solid var(--line);padding-top:16px;margin-top:12px">
+          <div class="form-section-heading" style="display:flex;justify-content:space-between;align-items:center"><h3>Branding</h3><span class="muted" style="font-size:11px">Theme accent applied to PDFs</span></div>
+          <div class="field-row">
+            <label class="field"><span>Accent color <small>Hex</small></span><input id="providerAccent" placeholder="#0071e3" pattern="^#.{6}$" /></label>
+            <label class="field"><span>Header style</span><select id="providerHeader"><option value="classic">Classic</option><option value="modern">Modern</option><option value="minimal">Minimal</option></select></label>
+          </div>
+        </div>
+        <div class="form-section" style="border-top:1px solid var(--line);padding-top:16px;margin-top:12px">
+          <div class="form-section-heading" style="display:flex;justify-content:space-between;align-items:center"><h3>Operators</h3><button id="newOperatorButton" class="button button-secondary" type="button" style="font-size:12px;padding:6px 10px">Add operator</button></div>
+          <div id="operatorList" style="margin-top:8px;max-height:140px;overflow:auto"><span class="muted" style="font-size:12px">Loading operators…</span></div>
+          <small>Operators get scoped tokens via <code>POST /api/operators</code> — checked in <code>requireAuth</code> alongside <code>ADMIN_TOKEN</code>.</small>
+        </div>
         <div class="modal-actions"><button type="button" class="button button-secondary" data-close="settingsModal">Cancel</button><button class="button button-primary" type="submit">Save settings</button></div>
         <div id="settingsError" class="form-error"></div>
       </form>
@@ -339,6 +360,73 @@
           <div class="modal-actions"><button type="button" id="changePasswordDoneButton" class="button button-primary">Done</button></div>
         </div>
         <div id="changePasswordError" class="form-error"></div>
+      </form>
+    </div>
+
+
+    <div id="bulkModal" class="modal-backdrop hidden">
+      <form id="bulkForm" class="modal-card">
+        <div class="modal-heading"><div><p class="section-label">Clients</p><h2>Bulk import</h2></div><button type="button" class="close-button" data-close="bulkModal" aria-label="Close bulk">×</button></div>
+        <p class="modal-description">Paste a JSON array of clients (same shape as <code>ClientInput</code>). Max 50 per request. Errors are returned per-row.</p>
+        <label class="field"><span>JSON</span><textarea id="bulkJson" rows="10" placeholder='[{"name":"Acme","email":"billing@acme.com","githubRepos":["owner/repo"],"currency":"USD","billingModel":"flat","paymentMethod":"wire","paymentTerms":"Due on receipt"}]'></textarea></label>
+        <div id="bulkPreview" class="form-error" style="white-space:pre-wrap;max-height:120px;overflow:auto"></div>
+        <div class="modal-actions"><button type="button" class="button button-secondary" data-close="bulkModal">Cancel</button><button class="button button-primary" type="submit">Import</button></div>
+        <div id="bulkError" class="form-error"></div>
+      </form>
+    </div>
+
+    <div id="discoverModal" class="modal-backdrop hidden">
+      <form id="discoverForm" class="modal-card">
+        <div class="modal-heading"><div><p class="section-label">GitHub</p><h2>Discover repos</h2></div><button type="button" class="close-button" data-close="discoverModal" aria-label="Close discover">×</button></div>
+        <p class="modal-description">Enter a GitHub org or user — we call <code>POST /api/clients/discover {query}</code> (uses your <code>GITHUB_TOKEN</code>).</p>
+        <label class="field"><span>Org or user</span><input id="discoverQuery" placeholder="idea-torx" required /></label>
+        <div id="discoverResults" style="margin-top:12px;max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px;display:none"></div>
+        <div class="modal-actions"><button type="button" class="button button-secondary" data-close="discoverModal">Cancel</button><button class="button button-primary" type="submit">Discover</button></div>
+        <div id="discoverError" class="form-error"></div>
+      </form>
+    </div>
+
+    <div id="timeModal" class="modal-backdrop hidden">
+      <form id="timeForm" class="modal-card">
+        <div class="modal-heading"><div><p class="section-label">Time</p><h2>Import time entries</h2></div><button type="button" class="close-button" data-close="timeModal" aria-label="Close time">×</button></div>
+        <p class="modal-description">Paste JSON: <code>[{"date":"2026-07-15","hours":4.5,"description":"Design"}]</code> — stored per-client and listed in the client modal.</p>
+        <label class="field"><span>Entries JSON</span><textarea id="timeJson" rows="8" placeholder='[{"date":"2026-07-15","hours":4.5,"description":"Build"}]'></textarea></label>
+        <div class="modal-actions"><button type="button" class="button button-secondary" data-close="timeModal">Cancel</button><button class="button button-primary" type="submit">Import</button></div>
+        <div id="timeError" class="form-error"></div>
+      </form>
+    </div>
+
+    <div id="invoiceEditModal" class="modal-backdrop hidden">
+      <form id="invoiceEditForm" class="modal-card">
+        <div class="modal-heading"><div><p class="section-label">Invoice</p><h2>Edit line items</h2></div><button type="button" class="close-button" data-close="invoiceEditModal" aria-label="Close edit">×</button></div>
+        <p class="modal-description">Override title/overview/highlights/deliverables/timeline — patched via <code>PATCH /api/invoices/:id/summary</code> and versioned.</p>
+        <label class="field"><span>Title</span><input id="editTitle" /></label>
+        <label class="field"><span>Overview</span><textarea id="editOverview" rows="2"></textarea></label>
+        <label class="field"><span>Highlights <small>one per line</small></span><textarea id="editHighlights" rows="3"></textarea></label>
+        <label class="field"><span>Deliverables <small>one per line</small></span><textarea id="editDeliverables" rows="3"></textarea></label>
+        <label class="field"><span>Timeline JSON <small>Optional</small></span><textarea id="editTimeline" rows="3" placeholder='[{"period":"Jul 1-7","title":"...","detail":"...","commits":5}]'></textarea></label>
+        <div class="modal-actions"><button type="button" class="button button-secondary" data-close="invoiceEditModal">Cancel</button><button class="button button-primary" type="submit">Save</button></div>
+        <div id="editError" class="form-error"></div>
+      </form>
+    </div>
+
+    <div id="versionsModal" class="modal-backdrop hidden">
+      <div class="modal-card">
+        <div class="modal-heading"><div><p class="section-label">Invoice</p><h2>Version history</h2></div><button type="button" class="close-button" data-close="versionsModal" aria-label="Close versions">×</button></div>
+        <div id="versionsList" style="max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px"></div>
+        <div class="modal-actions"><button type="button" class="button button-secondary" data-close="versionsModal">Close</button></div>
+      </div>
+    </div>
+
+    <div id="operatorModal" class="modal-backdrop hidden">
+      <form id="operatorForm" class="modal-card" style="max-width:420px">
+        <div class="modal-heading"><div><p class="section-label">Operator</p><h2>Add operator</h2></div><button type="button" class="close-button" data-close="operatorModal" aria-label="Close operator">×</button></div>
+        <label class="field"><span>Name</span><input id="operatorName" required placeholder="Jane" /></label>
+        <label class="field"><span>Role</span><select id="operatorRole"><option value="operator">operator</option><option value="admin">admin</option></select></label>
+        <label class="field"><span>Token <small>Optional — generated if blank</small></span><input id="operatorToken" placeholder="leave blank to generate" /></label>
+        <div id="operatorResult" class="form-error" style="color:var(--ink);white-space:pre-wrap"></div>
+        <div class="modal-actions"><button type="button" class="button button-secondary" data-close="operatorModal">Cancel</button><button class="button button-primary" type="submit">Create</button></div>
+        <div id="operatorError" class="form-error"></div>
       </form>
     </div>
 
