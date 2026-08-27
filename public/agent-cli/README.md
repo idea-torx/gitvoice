@@ -15,6 +15,12 @@ python3 gitvoice-agent.py --help
 |---|---|
 | `setup` | First-time onboarding (admin password, business profile) → one-time recovery code |
 | `clients` / `client-add` / `client-update` / `client-delete` | Full client profile CRUD, incl. portal passwords |
+
+`client-add` / `client-update` cover the whole profile: `--name` (the company billed on the
+invoice), `--first-name` / `--last-name` (the person addressed at it), `--email`, `--phone`,
+`--address`, `--website`, `--currency`, `--payment-method etransfer|wire|alternative`,
+`--model hourly|flat`, `--rate-cents`. Unset flags on `client-update` leave the stored value alone.
+
 | `preview` / `create` | Generate LLM-written invoice drafts; finalize (idempotent per billing period) |
 | `get` / `list` / `invoice-delete` | Inspect, list, or remove invoices |
 | `pdf` | Download the invoice PDF |

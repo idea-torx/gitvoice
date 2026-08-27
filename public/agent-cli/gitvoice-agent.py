@@ -6,8 +6,9 @@ Auth: admin secret via $GITVOICE_ADMIN_TOKEN (any platform) or macOS Keychain
 ~/.hermes/state/gitvoice-token.json (or $XDG_STATE_HOME on non-macOS).
 
 Usage:
-  gitvoice-agent.py client-add --name "Acme" --email a@b.c [--currency USD] [--model hourly|flat] [--rate-cents N] [--base URL]
-  gitvoice-agent.py client-update --id ID [--name] [--email] [--currency] [--model] [--rate-cents] [--active true|false] [--base URL]
+  gitvoice-agent.py client-add --name "Acme Inc." --email a@b.c [--first-name] [--last-name] [--phone] [--website] [--currency CAD] [--payment-method etransfer|wire|alternative] [--model hourly|flat] [--rate-cents N] [--base URL]
+  gitvoice-agent.py client-update --id ID [--name] [--first-name] [--last-name] [--email] [--phone] [--website] [--currency] [--payment-method] [--model] [--rate-cents] [--active true|false] [--base URL]
+      (--name is the company billed on the invoice; --first-name/--last-name are the person addressed at it)
   gitvoice-agent.py client-delete --id ID --yes [--base URL]
   gitvoice-agent.py auth
   gitvoice-agent.py clients [--base URL]
@@ -235,14 +236,27 @@ def cmd_list(args):
               f"{inv.get('currency','')} {inv.get('totalCents',0)/100:>10.2f}  {inv.get('status','')}  {inv.get('id','')}")
 
 
+PAYMENT_METHODS = ["etransfer", "wire", "alternative"]
+
+# argparse dest -> ClientInput key, for every field client-update can override.
+CLIENT_FIELD_FLAGS = [
+    ("name", "name"), ("first_name", "contactFirstName"), ("last_name", "contactLastName"),
+    ("email", "email"), ("phone", "phone"), ("address", "address"), ("website", "website"),
+    ("currency", "currency"), ("payment_method", "paymentMethod"),
+    ("model", "billingModel"), ("rate_cents", "defaultRateCents"), ("active", "active"),
+]
+
+
 def cmd_client_add(args):
     token = require_auth(args.base)
     payload = {
-        "name": args.name, "email": args.email, "address": "",
+        "name": args.name, "email": args.email, "address": args.address or "",
+        "contactFirstName": args.first_name or "", "contactLastName": args.last_name or "",
+        "phone": args.phone or "", "website": args.website or "",
         "githubRepos": [], "githubAuthor": "", "projectContext": "",
         "summaryPriorities": "", "currency": args.currency,
         "billingModel": args.model, "defaultRateCents": args.rate_cents,
-        "taxRate": 0, "cadence": "manual", "paymentMethod": "wire",
+        "taxRate": 0, "cadence": "manual", "paymentMethod": args.payment_method,
         "paymentDays": 0, "paymentTerms": "Due on receipt",
         "specialTerms": "", "active": True,
     }
@@ -258,10 +272,13 @@ def client_payload_from(c):
     """Build a full ClientInput body from a bootstrap client record (upsert = full replace)."""
     return {
         "name": c.get("name", ""), "email": c.get("email", ""), "address": c.get("address", ""),
+        "contactFirstName": c.get("contactFirstName", ""), "contactLastName": c.get("contactLastName", ""),
+        "phone": c.get("phone", ""), "website": c.get("website", ""),
         "githubRepos": c.get("githubRepos", []), "githubAuthor": c.get("githubAuthor", ""),
         "projectContext": c.get("projectContext", ""), "summaryPriorities": c.get("summaryPriorities", ""),
         "currency": c.get("currency", "USD"), "billingModel": c.get("billingModel", "hourly"),
-        "defaultRateCents": c.get("defaultRateCents", 0), "taxRate": c.get("taxRate", 0),
+        "defaultRateCents": c.get("defaultRateCents", 0), "defaultHours": c.get("defaultHours") or 0,
+        "billingDay": c.get("billingDay", 1), "taxRate": c.get("taxRate", 0),
         "cadence": c.get("cadence", "manual"), "paymentMethod": c.get("paymentMethod", "wire"),
         "paymentDays": c.get("paymentDays", 0), "paymentTerms": c.get("paymentTerms", "Due on receipt"),
         "specialTerms": c.get("specialTerms", ""), "active": c.get("active", True),
@@ -277,12 +294,10 @@ def cmd_client_update(args):
     if not target:
         die(f"client {args.id} not found")
     payload = client_payload_from(target)
-    if args.name is not None: payload["name"] = args.name
-    if args.email is not None: payload["email"] = args.email
-    if args.currency is not None: payload["currency"] = args.currency
-    if args.model is not None: payload["billingModel"] = args.model
-    if args.rate_cents is not None: payload["defaultRateCents"] = args.rate_cents
-    if args.active is not None: payload["active"] = args.active
+    for dest, key in CLIENT_FIELD_FLAGS:
+        value = getattr(args, dest, None)
+        if value is not None:
+            payload[key] = value
     if getattr(args, "portal_password", None):
         payload["portalPassword"] = args.portal_password
     status, data = request(args.base, f"/api/clients/{args.id}", method="PUT", token=token, payload=payload)
@@ -290,6 +305,9 @@ def cmd_client_update(args):
         die(f"client-update failed (HTTP {status}): {data}")
     c = data.get("client", data)
     print(json.dumps({"id": c.get("id"), "name": c.get("name"), "email": c.get("email"),
+                      "contact": " ".join(x for x in (c.get("contactFirstName"), c.get("contactLastName")) if x),
+                      "phone": c.get("phone"), "website": c.get("website"),
+                      "currency": c.get("currency"), "paymentMethod": c.get("paymentMethod"),
                       "model": c.get("billingModel"), "rateCents": c.get("defaultRateCents"),
                       "active": c.get("active")}, indent=2))
 
@@ -607,17 +625,29 @@ def main():
     sub.add_parser("operators")
 
     ca = sub.add_parser("client-add")
-    ca.add_argument("--name", required=True)
+    ca.add_argument("--name", required=True, help="company billed on the invoice")
     ca.add_argument("--email", required=True)
+    ca.add_argument("--first-name", help="person addressed at the company")
+    ca.add_argument("--last-name")
+    ca.add_argument("--phone")
+    ca.add_argument("--address")
+    ca.add_argument("--website")
     ca.add_argument("--currency", default="CAD")
+    ca.add_argument("--payment-method", choices=PAYMENT_METHODS, default="wire")
     ca.add_argument("--model", choices=["hourly", "flat"], default="hourly")
     ca.add_argument("--rate-cents", type=int, default=0)
     ca.add_argument("--portal-password")
     cu = sub.add_parser("client-update")
     cu.add_argument("--id", required=True)
-    cu.add_argument("--name")
+    cu.add_argument("--name", help="company billed on the invoice")
     cu.add_argument("--email")
+    cu.add_argument("--first-name", help="person addressed at the company")
+    cu.add_argument("--last-name")
+    cu.add_argument("--phone")
+    cu.add_argument("--address")
+    cu.add_argument("--website")
     cu.add_argument("--currency")
+    cu.add_argument("--payment-method", choices=PAYMENT_METHODS)
     cu.add_argument("--model", choices=["hourly", "flat"])
     cu.add_argument("--rate-cents", type=int)
     cu.add_argument("--active", type=lambda s: s.lower() in ("1", "true", "yes"))
