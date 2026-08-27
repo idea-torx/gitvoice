@@ -622,14 +622,14 @@ function providerPayload() {
 function renderClients() {
   const root = $("#clientList");
   const q = ($("#clientSearch")?.value || "").trim().toLowerCase();
-  const filtered = q ? state.clients.filter(c => `${c.name} ${c.email} ${c.githubRepos.join(" ")} ${c.billingModel}`.toLowerCase().includes(q)) : state.clients;
+  const filtered = q ? state.clients.filter(c => `${c.name} ${contactName(c)} ${c.email} ${c.phone || ""} ${c.githubRepos.join(" ")} ${c.billingModel}`.toLowerCase().includes(q)) : state.clients;
   $("#clientCount").textContent = `${filtered.length} client${filtered.length === 1 ? "" : "s"}${q?` / ${state.clients.length}`:""}`;
   if (!filtered.length) {
     root.innerHTML = q ? `<div class="empty-state"><span>∅</span><p>No clients match “${esc(q)}”.</p></div>` : `<div class="empty-state"><span>+</span><p>Add your first client to start.</p></div>`;
     return;
   }
   const _origClients = state.clients; state.clients = filtered;
-  root.innerHTML = filtered.map((client) => `<article class="client-row"><div><p class="client-name">${esc(client.name)}</p><div class="client-meta"><span><i class="cadence-dot ${client.cadence === "manual" ? "manual" : ""}"></i>${esc(client.cadence)}</span><span>${client.githubRepos.length} repo${client.githubRepos.length === 1 ? "" : "s"}</span><span>${esc(client.billingModel === "hourly" ? "Hourly" : "Flat fee")}</span><span>${esc(paymentMethodLabel(client.paymentMethod))}</span><span>${client.portalPasswordSet ? "Portal ready" : "Portal password needed"}</span></div></div><div class="client-actions"><button data-edit-client="${esc(client.id)}">Edit</button><button data-delete-client="${esc(client.id)}">Remove</button></div></article>`).join("");
+  root.innerHTML = filtered.map((client) => `<article class="client-row"><div><p class="client-name">${esc(client.name)}</p><div class="client-meta">${contactName(client) ? `<span>${esc(contactName(client))}</span>` : ""}<span><i class="cadence-dot ${client.cadence === "manual" ? "manual" : ""}"></i>${esc(client.cadence)}</span><span>${client.githubRepos.length} repo${client.githubRepos.length === 1 ? "" : "s"}</span><span>${esc(client.billingModel === "hourly" ? "Hourly" : "Flat fee")}</span><span>${esc(paymentMethodLabel(client.paymentMethod))}</span><span>${client.portalPasswordSet ? "Portal ready" : "Portal password needed"}</span></div></div><div class="client-actions"><button data-edit-client="${esc(client.id)}">Edit</button><button data-delete-client="${esc(client.id)}">Remove</button></div></article>`).join("");
   state.clients = _origClients;
   $$('[data-edit-client]').forEach((button) => button.addEventListener("click", () => openClientModal(state.clients.find((client) => client.id === button.dataset.editClient))));
   $$('[data-delete-client]').forEach((button) => button.addEventListener("click", () => removeClient(button.dataset.deleteClient)));
@@ -1046,7 +1046,11 @@ function openClientModal(client) {
   $("#clientModalTitle").textContent = client ? "Edit client" : "Add a client";
   $("#clientId").value = client?.id || "";
   $("#clientName").value = client?.name || "";
+  $("#clientContactFirstName").value = client?.contactFirstName || "";
+  $("#clientContactLastName").value = client?.contactLastName || "";
   $("#clientEmail").value = client?.email || "";
+  $("#clientPhone").value = client?.phone || "";
+  $("#clientWebsite").value = client?.website || "";
   $("#clientAddress").value = client?.address || "";
   $("#clientRepos").value = (client?.githubRepos || []).join("\n");
   $("#clientAuthor").value = client?.githubAuthor || "";
@@ -1072,7 +1076,7 @@ function openClientModal(client) {
 async function saveClient(event) {
   event.preventDefault();
   const id = $("#clientId").value;
-  const input = { id: id || undefined, name: $("#clientName").value.trim(), email: $("#clientEmail").value.trim(), address: $("#clientAddress").value.trim(), githubRepos: parseGithubRepositories($("#clientRepos").value), githubAuthor: $("#clientAuthor").value.trim(), projectContext: $("#clientProjectContext").value.trim(), summaryPriorities: $("#clientSummaryPriorities").value.trim(), currency: $("#clientCurrency").value, billingModel: $("#clientBillingModel").value, defaultRateCents: 0, taxRate: Number($("#clientTax").value || 0), cadence: $("#clientCadence").value, paymentMethod: $("#clientPaymentMethod").value, paymentDays: Number($("#clientPaymentDays").value || 0), paymentTerms: $("#clientPaymentTerms").value.trim(), portalPassword: $("#clientPortalPassword").value, specialTerms: $("#clientTerms").value.trim(), active: true };
+  const input = { id: id || undefined, name: $("#clientName").value.trim(), contactFirstName: $("#clientContactFirstName").value.trim(), contactLastName: $("#clientContactLastName").value.trim(), email: $("#clientEmail").value.trim(), phone: $("#clientPhone").value.trim(), website: $("#clientWebsite").value.trim(), address: $("#clientAddress").value.trim(), githubRepos: parseGithubRepositories($("#clientRepos").value), githubAuthor: $("#clientAuthor").value.trim(), projectContext: $("#clientProjectContext").value.trim(), summaryPriorities: $("#clientSummaryPriorities").value.trim(), currency: $("#clientCurrency").value, billingModel: $("#clientBillingModel").value, defaultRateCents: 0, taxRate: Number($("#clientTax").value || 0), cadence: $("#clientCadence").value, paymentMethod: $("#clientPaymentMethod").value, paymentDays: Number($("#clientPaymentDays").value || 0), paymentTerms: $("#clientPaymentTerms").value.trim(), portalPassword: $("#clientPortalPassword").value, specialTerms: $("#clientTerms").value.trim(), active: true };
   try {
     const data = await api(id ? `/api/clients/${encodeURIComponent(id)}` : "/api/clients", { method: id ? "PUT" : "POST", body: input });
     const index = state.clients.findIndex((client) => client.id === data.client.id);
@@ -1476,6 +1480,8 @@ function toast(message) { const node = $("#toast"); node.textContent = message; 
 function formatMoney(cents, currency) { try { return new Intl.NumberFormat("en-US", { style: "currency", currency, currencyDisplay: "code", maximumFractionDigits: 2 }).format((Number(cents) || 0) / 100); } catch { return `${currency} ${((Number(cents) || 0) / 100).toFixed(2)}`; } }
 function parseGithubRepositories(value) { return String(value || "").replace(/(?=https?:\/\/(?:www\.)?github\.com\/)/gi, "\n").split(/[\s,]+/).map((repo) => repo.trim()).filter(Boolean); }
 function paymentMethodLabel(method) { return method === "etransfer" ? "E-transfer" : method === "alternative" ? "Alternative" : "Wire transfer"; }
+
+function contactName(client) { return [client?.contactFirstName, client?.contactLastName].map((part) => (part || "").trim()).filter(Boolean).join(" "); }
 function formatDate(value) { return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }).format(new Date(`${value}T12:00:00Z`)); }
 function toDay(date) { return date.toISOString().slice(0, 10); }
 function esc(value) { return String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character] || character); }

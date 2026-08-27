@@ -183,10 +183,16 @@
       <form id="clientForm" class="modal-card client-modal-card">
         <div class="modal-heading"><div><p class="section-label">Client profile</p><h2 id="clientModalTitle">Add client</h2></div><button type="button" class="close-button" data-close="clientModal" aria-label="Close client form">×</button></div>
         <input id="clientId" type="hidden" />
+        <label class="field"><span>Company</span><input id="clientName" required placeholder="Acme Inc." /><small>Billed on the invoice.</small></label>
         <div class="field-row">
-          <label class="field"><span>Client or company</span><input id="clientName" required placeholder="Acme Inc." /></label>
-          <label class="field"><span>Billing email</span><input id="clientEmail" type="email" placeholder="billing@example.com" /></label>
+          <label class="field"><span>First name <small>Optional</small></span><input id="clientContactFirstName" autocomplete="off" placeholder="Marc" /></label>
+          <label class="field"><span>Last name <small>Optional</small></span><input id="clientContactLastName" autocomplete="off" placeholder="Duval" /></label>
         </div>
+        <div class="field-row">
+          <label class="field"><span>Billing email</span><input id="clientEmail" type="email" placeholder="billing@example.com" /></label>
+          <label class="field"><span>Phone <small>Optional</small></span><input id="clientPhone" type="tel" autocomplete="off" placeholder="+1 604 555 0142" /></label>
+        </div>
+        <label class="field"><span>Website <small>Optional</small></span><input id="clientWebsite" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://acme.com" /></label>
         <label class="field"><span>Address</span><textarea id="clientAddress" rows="3" placeholder="Street address&#10;City, Province&#10;Country"></textarea></label>
         <label class="field"><span>GitHub repositories</span><textarea id="clientRepos" rows="3" placeholder="https://github.com/owner/repository&#10;owner/another-repository"></textarea><small>Paste GitHub URLs or owner/repository names. Spaces, commas, new lines, and adjacent GitHub URLs are accepted.</small></label>
         <div class="field-row">

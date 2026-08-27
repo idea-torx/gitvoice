@@ -1,0 +1,7 @@
+ALTER TABLE clients ADD COLUMN contact_first_name TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE clients ADD COLUMN contact_last_name TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE clients ADD COLUMN phone TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE clients ADD COLUMN website TEXT NOT NULL DEFAULT '';

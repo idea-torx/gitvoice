@@ -30,8 +30,12 @@ export function rowToClient(row: D1ClientRow): Client {
   return {
     id: row.id,
     name: row.name,
+    contactFirstName: row.contact_first_name || "",
+    contactLastName: row.contact_last_name || "",
     email: row.email,
+    phone: row.phone || "",
     address: row.address,
+    website: row.website || "",
     githubRepos: parseJsonArray(row.github_repos),
     githubAuthor: row.github_author,
     projectContext: row.project_context || "",
@@ -160,14 +164,19 @@ export async function upsertClient(db: D1Database, input: ClientInput): Promise<
   await db
     .prepare(
       `INSERT INTO clients (
-        id, name, email, address, github_repos, github_author, project_context, summary_priorities, cadence, billing_day,
+        id, name, contact_first_name, contact_last_name, email, phone, address, website,
+        github_repos, github_author, project_context, summary_priorities, cadence, billing_day,
         billing_model, flat_amount_cents, default_hours, currency, payment_method, payment_terms, payment_days, special_terms, tax_rate,
         portal_password_hash, portal_password_salt, active, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
+        contact_first_name = excluded.contact_first_name,
+        contact_last_name = excluded.contact_last_name,
         email = excluded.email,
+        phone = excluded.phone,
         address = excluded.address,
+        website = excluded.website,
         github_repos = excluded.github_repos,
         github_author = excluded.github_author,
         project_context = excluded.project_context,
@@ -191,8 +200,12 @@ export async function upsertClient(db: D1Database, input: ClientInput): Promise<
     .bind(
       id,
       normalized.name,
+      normalized.contactFirstName,
+      normalized.contactLastName,
       normalized.email,
+      normalized.phone,
       normalized.address,
+      normalized.website,
       JSON.stringify(normalized.githubRepos),
       normalized.githubAuthor,
       normalized.projectContext,
@@ -339,8 +352,12 @@ function normalizeClientInput(input: ClientInput): Client {
   return {
     id: input.id || "",
     name: required(input.name, "Client name"),
+    contactFirstName: input.contactFirstName?.trim().slice(0, 120) || "",
+    contactLastName: input.contactLastName?.trim().slice(0, 120) || "",
     email: input.email?.trim() || "",
+    phone: input.phone?.trim().slice(0, 40) || "",
     address: input.address?.trim() || "",
+    website: input.website?.trim().slice(0, 300) || "",
     githubRepos: repos,
     githubAuthor: input.githubAuthor?.trim() || "",
     projectContext: input.projectContext?.trim().slice(0, 4000) || "",

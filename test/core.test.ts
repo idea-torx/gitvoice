@@ -10,8 +10,12 @@ import type { Client, InvoiceDraft } from "../src/types";
 const client: Client = {
   id: "client-1",
   name: "Acme Inc.",
+  contactFirstName: "",
+  contactLastName: "",
   email: "billing@example.com",
+  phone: "",
   address: "456 Market St\nSan Francisco, CA 94105\nUnited States",
+  website: "",
   githubRepos: ["acme/product"],
   githubAuthor: "",
   projectContext: "A client-facing product platform.",
@@ -170,6 +174,18 @@ describe("summary and invoice rendering", () => {
     expect(withNotes).toContain("Work details:");
     expect(withNotes).toContain("Thanks for your business!");
     expect(withNotes).toContain("Use the invoice number as the reference.");
+  });
+
+  it("prints the client contact, phone, and website only when they are set", () => {
+    const base: InvoiceDraft = { provider: { businessName: "Gitvoice", providerName: "Jane Doe", address: "Vancouver", email: "", website: "", taxId: "", remittance: "Wire details on file" }, client, periodStart: "2026-07-20", periodEnd: "2026-07-26", issuedAt: "2026-07-27T08:00:00Z", dueAt: "2026-07-27T08:00:00Z", subtotalCents: 400000, taxCents: 0, totalCents: 400000, pricing: { model: "flat", amountCents: 400000, description: "Flat project fee" }, summary: { title: "Phase two", overview: "A concise overview.", activitySummary: "One commit.", highlights: [], deliverables: [], nextSteps: [], timeline: [], source: "fallback" }, activity: { commits: [], repositories: [], additions: 0, deletions: 0, filesChanged: 0, contributors: [] } };
+    expect(renderInvoiceHtml({ ...base, number: "INV-2026-0003" })).not.toContain("Attn:");
+    expect(renderInvoiceHtml({ ...base, number: "INV-2026-0003" })).not.toContain("+1 604 555 0142");
+    const full = renderInvoiceHtml({ ...base, number: "INV-2026-0003", client: { ...client, contactFirstName: "Marc", contactLastName: "Duval", phone: "+1 604 555 0142", website: "https://acme.com" } });
+    expect(full).toContain("Attn: Marc Duval");
+    expect(full).toContain("+1 604 555 0142");
+    expect(full).toContain("https://acme.com");
+    // A half-filled name must not print a stray space.
+    expect(renderInvoiceHtml({ ...base, number: "INV-2026-0003", client: { ...client, contactFirstName: "Marc" } })).toContain("Attn: Marc\n");
   });
 
   it("prints the hourly rate and billable hours on hourly invoices", () => {

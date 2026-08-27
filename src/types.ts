@@ -56,9 +56,15 @@ export interface Operator {
 
 export interface Client {
   id: string;
+  /** Company billed on the invoice. */
   name: string;
+  /** Person to address at that company. Blank when there is no named contact. */
+  contactFirstName: string;
+  contactLastName: string;
   email: string;
+  phone: string;
   address: string;
+  website: string;
   githubRepos: string[];
   githubAuthor: string;
   projectContext: string;
@@ -192,8 +198,12 @@ export interface InvoiceRecord extends InvoiceDraft {
 export interface ClientInput {
   id?: string;
   name: string;
+  contactFirstName?: string;
+  contactLastName?: string;
   email?: string;
+  phone?: string;
   address?: string;
+  website?: string;
   githubRepos: string[];
   githubAuthor?: string;
   projectContext?: string;
@@ -238,8 +248,12 @@ export interface BrowserRun {
 export interface D1ClientRow {
   id: string;
   name: string;
+  contact_first_name: string;
+  contact_last_name: string;
   email: string;
+  phone: string;
   address: string;
+  website: string;
   github_repos: string;
   github_author: string;
   project_context: string;
