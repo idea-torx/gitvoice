@@ -11,22 +11,38 @@ python3 gitvoice-agent.py --help
 
 ## What an agent can do
 
+Every HTTP surface the worker exposes has a command here — the only exception is the Stripe
+webhook, which Stripe calls, not an agent. A test in `test/core.test.ts` fails CI if a new route
+ships without one.
+
 | Command | Action |
 |---|---|
+| `status` | Onboarding/health probe — no auth needed |
 | `setup` | First-time onboarding (admin password, business profile) → one-time recovery code |
+| `auth` / `reset-password` / `recover` | Mint a token, rotate the admin password, or recover with the code |
+| `settings` / `settings-update` | Provider profile, tax ID, logo URL, invoice theme |
+| `operators` / `operator-add` | List operators; mint one (its token is shown once) |
 | `clients` / `client-add` / `client-update` / `client-delete` | Full client profile CRUD, incl. portal passwords |
+| `discover` / `bulk-import` | Find clients from GitHub activity; import many at once |
+| `time` / `time-import` | Read or load a client's time entries |
+| `preview` / `create` | Generate LLM-written invoice drafts; finalize (idempotent per billing period) |
+| `get` / `list` / `versions` / `invoice-delete` | Inspect (`--html` for the rendered invoice), list, diff versions, remove |
+| `summary-patch` | Rewrite an issued invoice's summary — bumps the version, keeps history |
+| `void` / `reissue` / `notify` | Void, reissue, or email an invoice to the client |
+| `pdf` | Download the invoice PDF |
+| `backup` / `watch` | JSON snapshot + every invoice PDF, with manifest; on a timer |
+| `portal-clients` / `portal-login` / `portal-invoices` | Authenticate as a client and view their archive |
+| `portal-invoice` / `portal-dispute` | The client's own view of one invoice; file a dispute on it |
 
 `client-add` / `client-update` cover the whole profile: `--name` (the company billed on the
 invoice), `--first-name` / `--last-name` (the person addressed at it), `--email`, `--phone`,
 `--address`, `--website`, `--currency`, `--payment-method etransfer|wire|alternative`,
 `--model hourly|flat`, `--rate-cents`. Unset flags on `client-update` leave the stored value alone.
 
-| `preview` / `create` | Generate LLM-written invoice drafts; finalize (idempotent per billing period) |
-| `get` / `list` / `invoice-delete` | Inspect, list, or remove invoices |
-| `pdf` | Download the invoice PDF |
-| `backup` | JSON snapshot + every invoice PDF, with manifest |
-| `settings` / `settings-update` | Provider profile, tax ID, logo URL |
-| `portal-login` / `portal-invoices` | Authenticate as a client and view their portal archive |
+`preview` / `create` take `--desc` for a manual work description; **omit it** and the worker
+summarizes the client's GitHub activity instead. Either way `--title`, `--overview`,
+`--highlight`, `--deliverable`, `--next-step` (repeatable) and `--summary-file` override what
+the model wrote, before the invoice is finalized.
 
 ## Auth
 
@@ -40,6 +56,7 @@ Point `--base` at any Gitvoice deployment (default: the hosted worker).
 
 ## Safety
 
-- `create`, `client-delete`, and `invoice-delete` require an explicit `--yes`.
+- `create`, `client-delete`, `invoice-delete`, `notify`, and `portal-dispute` require an explicit
+  `--yes` — the two that reach the client (an email, a dispute) included.
 - Re-running `create` for an already-invoiced period returns the existing invoice — no duplicates.
 - Tokens and secrets are never printed.

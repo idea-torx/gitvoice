@@ -5,18 +5,39 @@ Auth: admin secret via $GITVOICE_ADMIN_TOKEN (any platform) or macOS Keychain
 (service=gitvoice-admin). POST /api/auth {password} -> 30-day token, cached in
 ~/.hermes/state/gitvoice-token.json (or $XDG_STATE_HOME on non-macOS).
 
-Usage:
-  gitvoice-agent.py client-add --name "Acme Inc." --email a@b.c [--first-name] [--last-name] [--phone] [--website] [--currency CAD] [--payment-method etransfer|wire|alternative] [--model hourly|flat] [--rate-cents N] [--base URL]
-  gitvoice-agent.py client-update --id ID [--name] [--first-name] [--last-name] [--email] [--phone] [--website] [--currency] [--payment-method] [--model] [--rate-cents] [--active true|false] [--base URL]
-      (--name is the company billed on the invoice; --first-name/--last-name are the person addressed at it)
-  gitvoice-agent.py client-delete --id ID --yes [--base URL]
-  gitvoice-agent.py auth
-  gitvoice-agent.py clients [--base URL]
-  gitvoice-agent.py preview --client ID --start YYYY-MM-DD --end YYYY-MM-DD --desc "..." [--hours N] [--rate-cents N] [--amount-cents N] [--base URL]
-  gitvoice-agent.py create  --client ID --start YYYY-MM-DD --end YYYY-MM-DD --desc "..." [--hours N] [--rate-cents N] [--amount-cents N] [--base URL] --yes
-  gitvoice-agent.py get ID [--base URL]
-  gitvoice-agent.py pdf ID [--base URL]
-  gitvoice-agent.py list [--base URL]
+Every HTTP surface the app exposes has a command here. `--base URL` is a global flag and
+must come before the subcommand (default: prod).
+
+Instance:
+  status | setup | auth [--force] | reset-password | recover --recovery-code --new-password
+  settings | settings-update [--business-name] [--provider-name] [--address] [--email] [--website]
+                             [--tax-id] [--remittance] [--logo-url] [--accent-color] [--font-family]
+                             [--header-style classic|modern|minimal]
+  operators | operator-add --name [--role admin|operator] [--token]
+
+Clients (--name is the company billed; --first-name/--last-name are the person addressed at it):
+  clients | discover --query "..." | bulk-import --file F
+  client-add --name "Acme Inc." --email a@b.c [--first-name] [--last-name] [--phone] [--address]
+             [--website] [--currency CAD] [--payment-method etransfer|wire|alternative]
+             [--model hourly|flat] [--rate-cents N] [--portal-password]
+  client-update --id ID [same flags] [--active true|false]
+  client-delete --id ID --yes
+  time --client-id ID | time-import --client-id ID --file F
+
+Invoices (omit --desc to summarize the client's GitHub activity instead):
+  preview --client ID --start YYYY-MM-DD --end YYYY-MM-DD [--desc "..."] [--source github|manual]
+          [--hours N] [--rate-cents N] [--amount-cents N] [--title] [--overview] [--highlight]
+          [--deliverable] [--next-step] [--summary-file F]
+  create  [same flags] --yes
+  list | get ID [--html] [--out F] | pdf ID [--out F] | versions --id ID
+  summary-patch --id ID [--title] [--overview] [--highlight] [--deliverable] [--next-step] [--summary-file F]
+  void --id ID | reissue --id ID | invoice-delete --id ID --yes
+  notify --id ID --yes        (emails the invoice to the client)
+
+Client portal / ops:
+  portal-clients | portal-login --client-id ID --password ... | portal-invoices
+  portal-invoice --id ID [--pdf] [--out F] | portal-dispute --id ID --reason "..." --yes
+  backup [--out DIR] | watch [--interval N] [--out DIR]
 """
 import argparse
 import json
@@ -149,14 +170,43 @@ def build_body(args):
             pricing = {"model": "hourly", "rateCents": args.rate_cents or 0}
             if getattr(args, "hours", None) is not None:
                 pricing["hours"] = args.hours
-    return {
+    body = {
         "clientId": args.client,
         "periodStart": args.start,
         "periodEnd": args.end,
         "pricing": pricing,
-        "source": "manual",
-        "description": args.desc,
     }
+    # No --desc (or --source github) means the worker summarizes the client's GitHub activity itself.
+    if getattr(args, "source", None) != "github" and getattr(args, "desc", None):
+        body["source"] = "manual"
+        body["description"] = args.desc
+    override = summary_override_from(args)
+    if override:
+        body["summaryOverride"] = override
+    return body
+
+
+def add_summary_override_args(p):
+    p.add_argument("--title")
+    p.add_argument("--overview")
+    p.add_argument("--highlight", action="append", help="repeatable")
+    p.add_argument("--deliverable", action="append", help="repeatable")
+    p.add_argument("--next-step", action="append", help="repeatable")
+    p.add_argument("--summary-file", help="JSON SummaryOverride (title/overview/highlights/deliverables/nextSteps/timeline)")
+
+
+def summary_override_from(args):
+    """SummaryOverride body from --summary-file plus the discrete --title/--overview/--highlight/... flags."""
+    override = {}
+    if getattr(args, "summary_file", None):
+        loaded = json.load(open(args.summary_file))
+        override.update(loaded.get("summary") if isinstance(loaded.get("summary"), dict) else loaded)
+    for dest, key in (("title", "title"), ("overview", "overview"), ("highlight", "highlights"),
+                      ("deliverable", "deliverables"), ("next_step", "nextSteps")):
+        value = getattr(args, dest, None)
+        if value:
+            override[key] = value
+    return override
 
 
 def cmd_preview(args):
@@ -189,15 +239,7 @@ def cmd_create(args):
     token = require_auth(args.base)
     # Direct create: the worker generates the summary and short-circuits with
     # existing:true if the period is already invoiced (no LLM call for dupes).
-    body = {
-        "clientId": args.client,
-        "periodStart": args.start,
-        "periodEnd": args.end,
-        "pricing": build_body(args).get("pricing"),
-        "source": "manual",
-        "description": args.desc,
-    }
-    status, created = request(args.base, "/api/invoices", method="POST", token=token, payload=body)
+    status, created = request(args.base, "/api/invoices", method="POST", token=token, payload=build_body(args))
     if status not in (200, 201):
         die(f"create failed (HTTP {status}): {created}")
     inv2 = (created or {}).get("invoice", {})
@@ -215,6 +257,16 @@ def cmd_create(args):
 
 def cmd_get(args):
     token = require_auth(args.base)
+    if args.html:
+        body, err = request_bytes(args.base, f"/invoice/{args.id}", token=token)
+        if body is None:
+            die(f"get --html failed: {err}")
+        if args.out:
+            open(args.out, "wb").write(body)
+            print(f"saved {len(body)} bytes → {os.path.abspath(args.out)}")
+        else:
+            print(body.decode("utf-8", "replace"))
+        return
     status, data = request(args.base, f"/api/invoices/{args.id}", token=token)
     if status != 200:
         die(f"get failed (HTTP {status}): {data}")
@@ -374,6 +426,12 @@ def cmd_settings_update(args):
     if args.tax_id is not None: p["taxId"] = args.tax_id
     if args.remittance is not None: p["remittance"] = args.remittance
     if args.logo_url is not None: p["logoUrl"] = args.logo_url
+    theme = dict(p.get("theme") or {})
+    if args.accent_color is not None: theme["accentColor"] = args.accent_color
+    if args.font_family is not None: theme["fontFamily"] = args.font_family
+    if args.header_style is not None: theme["headerStyle"] = args.header_style
+    if theme:
+        p["theme"] = theme
     status, data = request(args.base, "/api/settings", method="PUT", token=token, payload=p)
     if status != 200:
         die(f"settings-update failed (HTTP {status}): {data}")
@@ -548,6 +606,99 @@ def cmd_operators(args):
     print(json.dumps(data or {"status": status}, indent=2))
 
 
+def cmd_operator_add(args):
+    token = require_auth(args.base)
+    payload = {"name": args.name, "role": args.role}
+    if args.token:
+        payload["token"] = args.token
+    status, data = request(args.base, "/api/operators", method="POST", token=token, payload=payload)
+    if status not in (200, 201):
+        die(f"operator-add failed (HTTP {status}): {data}")
+    # The operator's token is only ever returned here — it is stored hashed.
+    print(json.dumps(data or {}, indent=2))
+
+
+def cmd_time(args):
+    token = require_auth(args.base)
+    status, data = request(args.base, f"/api/clients/{args.client_id}/time", token=token)
+    if status != 200:
+        die(f"time failed (HTTP {status}): {data}")
+    print(json.dumps(data or {}, indent=2, default=str))
+
+
+def cmd_versions(args):
+    token = require_auth(args.base)
+    status, data = request(args.base, f"/api/invoices/{args.id}/versions", token=token)
+    if status != 200:
+        die(f"versions failed (HTTP {status}): {data}")
+    print(json.dumps(data or {}, indent=2, default=str))
+
+
+def cmd_notify(args):
+    if not args.yes:
+        die("notify requires --yes (emails the invoice to the client).")
+    token = require_auth(args.base)
+    status, data = request(args.base, f"/api/invoices/{args.id}/notify", method="POST", token=token)
+    if status != 200:
+        die(f"notify failed (HTTP {status}): {data}")
+    print(json.dumps(data or {}, indent=2))
+
+
+def cmd_summary_patch(args):
+    override = summary_override_from(args)
+    if not override:
+        die("summary-patch needs at least one of --title/--overview/--highlight/--deliverable/--next-step/--summary-file.")
+    token = require_auth(args.base)
+    status, data = request(args.base, f"/api/invoices/{args.id}/summary", method="PATCH", token=token, payload=override)
+    if status != 200:
+        die(f"summary-patch failed (HTTP {status}): {data}")
+    inv = (data or {}).get("invoice", {})
+    print(json.dumps({"id": inv.get("id"), "number": inv.get("number"),
+                      "version": inv.get("version"), "summary": inv.get("summary")}, indent=2, default=str))
+
+
+def cmd_status(args):
+    status, data = request(args.base, "/api/status")
+    if status != 200:
+        die(f"status failed (HTTP {status}): {data}")
+    health_status, health = request(args.base, "/api/health")
+    print(json.dumps({**(data or {}), "health": (health or {}).get("ok", health_status == 200)}, indent=2))
+
+
+def cmd_recover(args):
+    status, data = request(args.base, "/api/auth/recover", method="POST",
+                           payload={"recoveryCode": args.recovery_code, "password": args.new_password})
+    if status != 200:
+        die(f"recover failed (HTTP {status}): {data}")
+    print(json.dumps({"ok": True, "recoveryCode": data.get("recoveryCode")}, indent=2))
+
+
+def cmd_portal_invoice(args):
+    """The client's own view of one invoice — HTML by default, PDF with --pdf."""
+    token = require_portal_token(args.base)
+    path = f"/portal/invoices/{args.id}/pdf" if args.pdf else f"/portal/invoices/{args.id}"
+    body, err = request_bytes(args.base, path, token=token)
+    if body is None:
+        die(f"portal-invoice failed: {err}")
+    out = args.out or (f"INV-{args.id[:8]}.pdf" if args.pdf else None)
+    if out:
+        open(out, "wb").write(body)
+        print(f"saved {len(body)} bytes → {os.path.abspath(out)}")
+    else:
+        print(body.decode("utf-8", "replace"))
+
+
+def cmd_portal_dispute(args):
+    if not args.yes:
+        die("portal-dispute requires --yes (files a dispute on the invoice).")
+    token = require_portal_token(args.base)
+    status, data = request(args.base, f"/portal/invoices/{args.id}/dispute", method="POST",
+                           token=token, payload={"reason": args.reason})
+    if status not in (200, 201):
+        die(f"portal-dispute failed (HTTP {status}): {data}")
+    print(json.dumps(data or {}, indent=2, default=str))
+
+
 def cmd_reset_password(args):
     base = args.base
     # Use adminToken directly without prior auth
@@ -579,8 +730,10 @@ def main():
     sub.add_parser("settings")
     su = sub.add_parser("settings-update")
     for name in ("--business-name", "--provider-name", "--address", "--email",
-                 "--website", "--tax-id", "--remittance", "--logo-url"):
+                 "--website", "--tax-id", "--remittance", "--logo-url",
+                 "--accent-color", "--font-family"):
         su.add_argument(name)
+    su.add_argument("--header-style", choices=["classic", "modern", "minimal"])
 
     pdd = sub.add_parser("pdf")
     pdd.add_argument("id")
@@ -623,6 +776,40 @@ def main():
     ti.add_argument("--file", required=True, help="JSON file with time entries")
 
     sub.add_parser("operators")
+    oa = sub.add_parser("operator-add")
+    oa.add_argument("--name", required=True)
+    oa.add_argument("--role", choices=["admin", "operator"], default="operator")
+    oa.add_argument("--token", help="omit to have the worker mint one (shown once)")
+
+    sub.add_parser("status")
+
+    rc = sub.add_parser("recover")
+    rc.add_argument("--recovery-code", required=True)
+    rc.add_argument("--new-password", required=True)
+
+    tl = sub.add_parser("time")
+    tl.add_argument("--client-id", required=True)
+
+    vs = sub.add_parser("versions")
+    vs.add_argument("--id", required=True)
+
+    nt = sub.add_parser("notify")
+    nt.add_argument("--id", required=True)
+    nt.add_argument("--yes", action="store_true")
+
+    sp = sub.add_parser("summary-patch")
+    sp.add_argument("--id", required=True)
+    add_summary_override_args(sp)
+
+    pi = sub.add_parser("portal-invoice")
+    pi.add_argument("--id", required=True)
+    pi.add_argument("--pdf", action="store_true", help="fetch the PDF instead of the HTML")
+    pi.add_argument("--out")
+
+    pd = sub.add_parser("portal-dispute")
+    pd.add_argument("--id", required=True)
+    pd.add_argument("--reason", required=True)
+    pd.add_argument("--yes", action="store_true")
 
     ca = sub.add_parser("client-add")
     ca.add_argument("--name", required=True, help="company billed on the invoice")
@@ -655,20 +842,22 @@ def main():
     cd = sub.add_parser("client-delete")
     cd.add_argument("--id", required=True)
     cd.add_argument("--yes", action="store_true")
-    pv = sub.add_parser("preview")
-    for name in ("--client", "--start", "--end", "--desc"):
-        pv.add_argument(name, required=True)
-    pv.add_argument("--hours", type=float)
-    pv.add_argument("--rate-cents", type=int)
-    pv.add_argument("--amount-cents", type=int)
-    cr = sub.add_parser("create")
-    for name in ("--client", "--start", "--end", "--desc"):
-        cr.add_argument(name, required=True)
-    cr.add_argument("--hours", type=float)
-    cr.add_argument("--rate-cents", type=int)
-    cr.add_argument("--amount-cents", type=int)
-    cr.add_argument("--yes", action="store_true")
-    sub.add_parser("get").add_argument("id")
+    for cmd in ("preview", "create"):
+        ip = sub.add_parser(cmd)
+        for name in ("--client", "--start", "--end"):
+            ip.add_argument(name, required=True)
+        ip.add_argument("--desc", help="manual work description; omit to summarize the client's GitHub activity")
+        ip.add_argument("--source", choices=["github", "manual"], help="default: manual when --desc is given, else github")
+        ip.add_argument("--hours", type=float)
+        ip.add_argument("--rate-cents", type=int)
+        ip.add_argument("--amount-cents", type=int)
+        add_summary_override_args(ip)
+        if cmd == "create":
+            ip.add_argument("--yes", action="store_true")
+    ge = sub.add_parser("get")
+    ge.add_argument("id")
+    ge.add_argument("--html", action="store_true", help="print the rendered invoice HTML instead of JSON")
+    ge.add_argument("--out", help="with --html, write to this file")
     sub.add_parser("list")
 
     args = p.parse_args()
@@ -682,7 +871,11 @@ def main():
           "watch": cmd_watch, "bulk-import": cmd_bulk_import, "discover": cmd_discover,
           "reset-password": cmd_reset_password,
           "void": cmd_void, "reissue": cmd_reissue, "time-import": cmd_time_import,
-          "operators": cmd_operators}[args.cmd]
+          "operators": cmd_operators, "operator-add": cmd_operator_add,
+          "status": cmd_status, "recover": cmd_recover, "time": cmd_time,
+          "versions": cmd_versions, "notify": cmd_notify,
+          "summary-patch": cmd_summary_patch, "portal-dispute": cmd_portal_dispute,
+          "portal-invoice": cmd_portal_invoice}[args.cmd]
     fn(args)
 
 

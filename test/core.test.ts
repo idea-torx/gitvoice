@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import workerSource from "../src/index.ts?raw";
+import cliSource from "../public/agent-cli/gitvoice-agent.py?raw";
 import worker, { allowAuthAttempt, duePeriod, duePeriods, resetAuthRateLimit } from "../src/index";
 import { renderInvoiceHtml } from "../src/invoice";
 import { hashPortalPassword, isPortalPasswordCompatible, issuePortalToken, verifyPortalPassword, verifyPortalToken, generateRecoveryCode, issueAdminToken, verifyAdminToken, hashAdminPassword, verifyAdminPassword } from "../src/security";
@@ -554,5 +556,30 @@ describe("admin onboarding endpoints", () => {
     const data = (await response.json()) as { requiresSetup: boolean; token: string };
     expect(data.requiresSetup).toBe(true);
     expect(typeof data.token).toBe("string");
+  });
+});
+
+describe("agent CLI coverage", () => {
+  const routes = workerSource;
+  const cli = cliSource;
+
+  // Every route the worker answers, as `METHOD /path` with :params in place of ids.
+  const declared = [...routes.matchAll(/path (?:===|\.startsWith\()\s*"([^"]+)"/g)].map((m) => m[1]);
+
+  // The Stripe webhook is called by Stripe, not by an agent — the only surface with no CLI command.
+  const EXTERNAL = ["/api/webhooks/stripe"];
+
+  it("exposes every worker route as a CLI command", () => {
+    // Paths the CLI actually requests, with f-string interpolations collapsed to a wildcard.
+    const called = [...cli.matchAll(/f?"(\/(?:api|portal|invoice)[^"]*)"/g)].map((m) => m[1].replace(/\{[^}]+\}/g, "*"));
+    const covered = (route: string) =>
+      called.some((path) => {
+        if (path === route) return true;
+        // "/api/invoices/*/pdf" covers the route prefix "/api/invoices/" plus its suffix.
+        const [prefix, suffix] = [route, path.split("*")[1] || ""];
+        return path.startsWith(prefix) && (!suffix || path.endsWith(suffix));
+      });
+    const missing = declared.filter((route) => !EXTERNAL.includes(route) && !covered(route));
+    expect(missing).toEqual([]);
   });
 });
