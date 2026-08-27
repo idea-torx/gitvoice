@@ -1,11 +1,6 @@
-function getStoredToken(){
-  try{ const v=localStorage.getItem("gitvoice_token"); if(v) return v; }catch{}
-  try{ const v=sessionStorage.getItem("gitvoice_token"); if(v){ try{ localStorage.setItem("gitvoice_token",v);}catch{} return v; }}catch{}
-  return "";
-}
-function setStoredToken(v){ try{ localStorage.setItem("gitvoice_token",v);}catch{} try{ sessionStorage.setItem("gitvoice_token",v);}catch{} }
-function clearStoredToken(){ try{ localStorage.removeItem("gitvoice_token");}catch{} try{ sessionStorage.removeItem("gitvoice_token");}catch{} }
-const state = { token: getStoredToken(), status: null, mode: "login", setup: null, recoveryCode: "", clients: [], provider: null, invoices: [], preview: null, previewKey: "", previewRequest: null, source: "github", openInvoiceId: null };
+// The admin session is an HttpOnly cookie the browser attaches on its own: nothing to read,
+// nothing to store, and nothing for a script on this page to steal.
+const state = { status: null, mode: "login", setup: null, recoveryCode: "", clients: [], provider: null, invoices: [], preview: null, previewKey: "", previewRequest: null, source: "github", openInvoiceId: null };
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
@@ -32,7 +27,7 @@ function bindEvents() {
   $("#recoverDoneButton").addEventListener("click", () => { closeModal("recoverModal"); renderAuthScreen(state.status || {}); });
   $("#setupForm").addEventListener("submit", handleSetupSubmit);
   $("#setupBack").addEventListener("click", () => stepSetup(-1));
-  $("#signOutButton").addEventListener("click", () => { clearStoredToken(); state.token = ""; state.status = null; initAuth(); });
+  $("#signOutButton").addEventListener("click", signOut);
   $("#generatorForm").addEventListener("submit", preview);
   $("#previewForm").addEventListener("submit", (event) => { event.preventDefault(); generateInvoice(); });
   $("#generatorClient").addEventListener("change", selectGeneratorClient);
@@ -84,10 +79,15 @@ function bindEvents() {
   });
 }
 
-async function connect() {
+async function signOut() {
+  try { await api("/api/auth/logout", { method: "POST" }); } catch (error) { /* the cookie is cleared either way */ }
+  state.status = null;
+  initAuth();
+}
+
+async function connect(silent) {
   try {
     const data = await api("/api/bootstrap");
-    setStoredToken(state.token);
     state.clients = data.clients || [];
     state.provider = data.provider || {};
     state.invoices = data.invoices || [];
@@ -95,20 +95,17 @@ async function connect() {
     render();
     applyProviderBrand();
   } catch (error) {
-    state.token = "";
-    $("#authError").textContent = error.message === "Request failed (401)" ? "Session expired. Sign in again." : error.message || "Could not connect";
+    if (!silent) $("#authError").textContent = error.message === "Request failed (401)" ? "Session expired. Sign in again." : error.message || "Could not connect";
     renderAuthScreen(state.status || { onboarded: true, local: false });
   }
 }
 
 async function initAuth() {
   try {
-    const status = await api("/api/status", { auth: false });
+    const status = await api("/api/status");
     state.status = status;
-    if (state.token) {
-      await connect();
-      return;
-    }
+    // Only the server knows whether the cookie is still good, so ask instead of guessing.
+    if (status.onboarded) return connect(true);
     renderAuthScreen(status);
   } catch (error) {
     state.status = null;
@@ -172,9 +169,7 @@ async function authenticate(event) {
   const isBootstrap = state.mode === "bootstrap";
   setBusy(button, true, isBootstrap ? "Checking…" : "Signing in…");
   try {
-    const data = await api("/api/auth", { method: "POST", auth: false, body: { password: value } });
-    state.token = data.token;
-    setStoredToken(state.token);
+    const data = await api("/api/auth", { method: "POST", body: { password: value } });
     if (data.requiresSetup) { openSetup(); }
     else { await connect(); }
   } catch (error) {
@@ -192,12 +187,10 @@ async function authenticate(event) {
 async function openSetup() {
   state.setup = { step: 1, password: "", provider: {}, client: {} };
   state.recoveryCode = "";
-  if (state.token) {
-    try {
-      const data = await api("/api/bootstrap");
-      state.setup.provider = data.provider || {};
-    } catch (error) { /* prefill is best-effort */ }
-  }
+  try {
+    const data = await api("/api/bootstrap");
+    state.setup.provider = data.provider || {};
+  } catch (error) { /* prefill is best-effort */ }
   $("#setupModal").classList.remove("hidden");
   $("#setupError").textContent = "";
   renderSetupStep();
@@ -292,8 +285,6 @@ async function finishSetup() {
   setBusy(button, true, "Saving…");
   try {
     const data = await api("/api/setup", { method: "POST", body: { password: s.password, provider: s.provider } });
-    state.token = data.token;
-    setStoredToken(state.token);
     state.provider = data.provider;
     state.recoveryCode = data.recoveryCode;
     if (s.client && s.client.name) {
@@ -333,7 +324,7 @@ async function recoverAccess(event) {
   if (!code) { $("#recoverError").textContent = "Enter your recovery code."; return; }
   if (password.length < 8) { $("#recoverError").textContent = "Password must be at least 8 characters."; return; }
   try {
-    const data = await api("/api/auth/recover", { method: "POST", auth: false, body: { recoveryCode: code, password } });
+    const data = await api("/api/auth/recover", { method: "POST", body: { recoveryCode: code, password } });
     $("#recoverFields").classList.add("hidden");
     $("#recoverDone").classList.remove("hidden");
     $("#recoverNewCode").textContent = data.recoveryCode;
@@ -362,13 +353,11 @@ async function resetAccess(event){
   if(password !== confirm){ $("#resetError").textContent = "Passwords do not match."; return; }
   $("#resetError").textContent = "";
   try{
-    const data = await api("/api/auth/reset", { method: "POST", auth: false, body: { adminToken: token, password } });
-    state.token = data.token || "";
-    if(state.token) setStoredToken(state.token);
+    const data = await api("/api/auth/reset", { method: "POST", body: { adminToken: token, password } });
     $("#resetFields").classList.add("hidden");
     $("#resetDone").classList.remove("hidden");
     $("#resetNewCode").textContent = data.recoveryCode || "";
-    if(state.token) setTimeout(()=> connect(), 800);
+    setTimeout(()=> connect(), 800);
   }catch(error){
     $("#resetError").textContent = error.message || "Could not reset password.";
   }
@@ -398,13 +387,12 @@ async function changePassword(event){
       data = await api("/api/auth/reset", { method: "POST", body: { password: neu } });
     } catch(e){
       if(String(e.message).includes("Unauthorized") && cur){
-        data = await api("/api/auth/reset", { method: "POST", auth:false, body: { adminToken: cur, password: neu } });
+        data = await api("/api/auth/reset", { method: "POST", body: { adminToken: cur, password: neu } });
       } else throw e;
     }
     $("#changePasswordFields").classList.add("hidden");
     $("#changePasswordDone").classList.remove("hidden");
     $("#changePasswordNewCode").textContent = data.recoveryCode || "";
-    if(data.token){ state.token = data.token; setStoredToken(state.token); }
   }catch(error){
     $("#changePasswordError").textContent = error.message || "Could not change password.";
   }
@@ -662,7 +650,7 @@ function renderInvoices() {
   root.innerHTML = filtered.slice(0, 12).map((invoice) => {
     const isVoid = invoice.status === 'void';
     const versionBadge = invoice.version && invoice.version > 1 ? `<span class="muted" style="font-size:11px">v${invoice.version}</span>` : '';
-    return `<article class="invoice-row"><div><div class="invoice-number">${esc(invoice.number)} ${versionBadge}</div><div class="invoice-client">${esc(invoice.client.name)}</div></div><div class="invoice-period">${formatDate(invoice.periodStart)} - ${formatDate(invoice.periodEnd)}</div><div><div class="invoice-total">${formatMoney(invoice.totalCents, invoice.currency)}</div><div class="invoice-status ${invoice.dispute ? "invoice-status-disputed" : (isVoid?"invoice-status-void":"")}">${isVoid ? "Void" : invoice.dispute ? "Disputed" : esc(invoice.status || "generated")}</div></div><div class="invoice-actions" style="flex-wrap:wrap;gap:6px"><button class="invoice-open" type="button" data-open-invoice="${esc(invoice.id)}">View</button><button type="button" data-edit-invoice="${esc(invoice.id)}">Edit</button><button type="button" data-versions-invoice="${esc(invoice.id)}">Versions</button>${isVoid ? `<button type="button" data-reissue-invoice="${esc(invoice.id)}">Reissue</button>` : `<button type="button" data-void-invoice="${esc(invoice.id)}">Void</button>`}${isVoid || invoice.status === "paid" ? "" : `<button type="button" data-paid-invoice="${esc(invoice.id)}">Mark paid</button>`}<button type="button" data-notify-invoice="${esc(invoice.id)}" title="Email via Cloudflare Email beta">Notify</button><a class="invoice-download" href="/api/invoices/${encodeURIComponent(invoice.id)}/pdf?token=${encodeURIComponent(state.token)}" download>PDF ↓</a><button class="invoice-delete" type="button" data-delete-invoice="${esc(invoice.id)}" aria-label="Delete ${esc(invoice.number)}">Delete</button></div></article>`;
+    return `<article class="invoice-row"><div><div class="invoice-number">${esc(invoice.number)} ${versionBadge}</div><div class="invoice-client">${esc(invoice.client.name)}</div></div><div class="invoice-period">${formatDate(invoice.periodStart)} - ${formatDate(invoice.periodEnd)}</div><div><div class="invoice-total">${formatMoney(invoice.totalCents, invoice.currency)}</div><div class="invoice-status ${invoice.dispute ? "invoice-status-disputed" : (isVoid?"invoice-status-void":"")}">${isVoid ? "Void" : invoice.dispute ? "Disputed" : esc(invoice.status || "generated")}</div></div><div class="invoice-actions" style="flex-wrap:wrap;gap:6px"><button class="invoice-open" type="button" data-open-invoice="${esc(invoice.id)}">View</button><button type="button" data-edit-invoice="${esc(invoice.id)}">Edit</button><button type="button" data-versions-invoice="${esc(invoice.id)}">Versions</button>${isVoid ? `<button type="button" data-reissue-invoice="${esc(invoice.id)}">Reissue</button>` : `<button type="button" data-void-invoice="${esc(invoice.id)}">Void</button>`}${isVoid || invoice.status === "paid" ? "" : `<button type="button" data-paid-invoice="${esc(invoice.id)}">Mark paid</button>`}<button type="button" data-notify-invoice="${esc(invoice.id)}" title="Email via Cloudflare Email beta">Notify</button><a class="invoice-download" href="/api/invoices/${encodeURIComponent(invoice.id)}/pdf" download>PDF ↓</a><button class="invoice-delete" type="button" data-delete-invoice="${esc(invoice.id)}" aria-label="Delete ${esc(invoice.number)}">Delete</button></div></article>`;
   }).join("");
   $$('[data-open-invoice]').forEach((button) => button.addEventListener("click", () => openInvoiceModal(button.dataset.openInvoice)));
   $$('[data-delete-invoice]').forEach((button) => button.addEventListener("click", () => deleteInvoice(button.dataset.deleteInvoice, button)));
@@ -887,8 +875,8 @@ function openInvoiceModal(id) {
   const invoice = state.invoices.find((item) => item.id === id);
   if (!invoice) return toast("Invoice not found.");
   state.openInvoiceId = id;
-  const url = `/invoice/${encodeURIComponent(id)}?token=${encodeURIComponent(state.token)}`;
-  const pdfUrl = `/api/invoices/${encodeURIComponent(id)}/pdf?token=${encodeURIComponent(state.token)}`;
+  const url = `/invoice/${encodeURIComponent(id)}`;
+  const pdfUrl = `/api/invoices/${encodeURIComponent(id)}/pdf`;
   $("#invoiceModalTitle").textContent = invoice.number;
   $("#invoiceModalClient").textContent = `${invoice.client.name} · ${formatDate(invoice.periodStart)} – ${formatDate(invoice.periodEnd)}`;
   $("#invoiceManualDescription").classList.toggle("hidden", !invoice.manualDescription);
@@ -1492,7 +1480,6 @@ function initDatePickers() {
 
 async function api(path, options = {}) {
   const headers = {};
-  if (options.auth !== false && state.token) headers.Authorization = `Bearer ${state.token}`;
   if (options.body) headers["Content-Type"] = "application/json";
   const response = await fetch(path, { method: options.method || "GET", headers, body: options.body ? JSON.stringify(options.body) : undefined });
   const data = await response.json().catch(() => ({}));

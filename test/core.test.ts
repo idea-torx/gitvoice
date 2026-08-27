@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import workerSource from "../src/index.ts?raw";
 import cliSource from "../public/agent-cli/gitvoice-agent.py?raw";
-import worker, { agingBucket, allowAuthAttempt, duePeriod, duePeriods, resetAuthRateLimit } from "../src/index";
+import worker, { agingBucket, duePeriod, duePeriods } from "../src/index";
 import { renderInvoiceHtml } from "../src/invoice";
 import { hashPortalPassword, isPortalPasswordCompatible, issuePortalToken, verifyPortalPassword, verifyPortalToken, generateRecoveryCode, issueAdminToken, verifyAdminToken, hashAdminPassword, verifyAdminPassword } from "../src/security";
 import { buildActivityDigest, buildTimeline, fallbackSummary, summarizeManualActivity } from "../src/summary";
-import { createInvoiceRow, normalizeGithubRepositories, recordPayment } from "../src/repository";
+import { createInvoiceRow, createSession, deleteSession, normalizeGithubRepositories, recordAuthAttempt, recordPayment, verifySession } from "../src/repository";
 import { collectGithubActivity, matchesGithubAuthor } from "../src/github";
 import type { Client, InvoiceDraft } from "../src/types";
 
@@ -384,28 +384,60 @@ describe("admin authentication", () => {
   });
 });
 
-describe("authentication rate limiting", () => {
-  function unconfiguredDb(): D1Database {
-    const statement = { first: async () => null, all: async () => ({ results: [] }), run: async () => ({ success: true }), bind: () => statement };
-    return { prepare: () => statement } as unknown as D1Database;
+describe("sessions and rate limiting", () => {
+  /** Enough of D1 to exercise the two tables the auth path writes to. */
+  function memoryDb(): D1Database {
+    const attempts: Array<{ address: string; at: number }> = [];
+    const sessions = new Map<string, string>();
+    const prepare = (sql: string) => {
+      let args: unknown[] = [];
+      const statement = {
+        bind: (...values: unknown[]) => { args = values; return statement; },
+        all: async () => ({ results: [] }),
+        first: async () => {
+          if (sql.includes("COUNT(*) AS n")) return { n: attempts.filter((a) => a.address === args[0] && a.at > Number(args[1])).length };
+          if (sql.includes("FROM sessions")) {
+            const expiresAt = sessions.get(String(args[0]));
+            return expiresAt && expiresAt > String(args[1]) ? { token_hash: args[0] } : null;
+          }
+          return null;
+        },
+        run: async () => {
+          if (sql.startsWith("INSERT INTO auth_attempts")) attempts.push({ address: String(args[0]), at: Number(args[1]) });
+          if (sql.startsWith("DELETE FROM auth_attempts")) {
+            for (let index = attempts.length - 1; index >= 0; index -= 1) if (attempts[index].at <= Number(args[0])) attempts.splice(index, 1);
+          }
+          if (sql.startsWith("INSERT INTO sessions")) sessions.set(String(args[0]), String(args[2]));
+          if (sql.startsWith("DELETE FROM sessions WHERE token_hash")) sessions.delete(String(args[0]));
+          if (sql === "DELETE FROM sessions") sessions.clear();
+          return { success: true };
+        },
+      };
+      return statement;
+    };
+    return { prepare } as unknown as D1Database;
   }
 
-  function attempt(ip: string, now: number): boolean {
-    return allowAuthAttempt(new Request("https://invoice.test/api/auth", { method: "POST", headers: { "CF-Connecting-IP": ip } }), now);
-  }
+  it("issues a session that verifies until it is deleted", async () => {
+    const db = memoryDb();
+    const { token } = await createSession(db);
+    expect(await verifySession(db, token)).toBe(true);
+    expect(await verifySession(db, "not-a-token")).toBe(false);
+    await deleteSession(db, token);
+    expect(await verifySession(db, token)).toBe(false);
+  });
 
-  it("blocks an address after 10 attempts and frees it once the window rolls past", () => {
-    resetAuthRateLimit();
+  it("blocks an address after 10 attempts and frees it once the window rolls past", async () => {
+    const db = memoryDb();
     const start = Date.parse("2026-08-13T12:00:00Z");
-    for (let index = 0; index < 10; index += 1) expect(attempt("203.0.113.7", start + index)).toBe(true);
-    expect(attempt("203.0.113.7", start + 10)).toBe(false);
-    expect(attempt("203.0.113.8", start + 10)).toBe(true);
-    expect(attempt("203.0.113.7", start + 60_000)).toBe(true);
+    for (let index = 0; index < 10; index += 1) expect(await recordAuthAttempt(db, "203.0.113.7", start + index)).toBe(true);
+    expect(await recordAuthAttempt(db, "203.0.113.7", start + 10)).toBe(false);
+    expect(await recordAuthAttempt(db, "203.0.113.8", start + 10)).toBe(true);
+    expect(await recordAuthAttempt(db, "203.0.113.7", start + 60_000)).toBe(true);
   });
 
   it("answers a throttled login with 429", async () => {
-    resetAuthRateLimit();
-    const env = { DB: unconfiguredDb(), ADMIN_TOKEN: "setup-token", PORTAL_SECRET: "portal-secret" } as never;
+    const env = { DB: memoryDb(), ADMIN_TOKEN: "setup-token", PORTAL_SECRET: "portal-secret" } as never;
     const login = () => worker.fetch(
       new Request("https://invoice.test/api/auth", { method: "POST", headers: { "Content-Type": "application/json", "CF-Connecting-IP": "198.51.100.4" }, body: JSON.stringify({ password: "wrong" }) }),
       env,
@@ -414,6 +446,28 @@ describe("authentication rate limiting", () => {
     const throttled = await login();
     expect(throttled.status).toBe(429);
     expect(await throttled.json()).toEqual({ error: "Too many attempts. Try again shortly." });
+  });
+
+  it("signs in with a setup token, sets an HttpOnly cookie, and accepts it without any ?token=", async () => {
+    const env = { DB: memoryDb(), ADMIN_TOKEN: "setup-token", PORTAL_SECRET: "portal-secret" } as never;
+    const signIn = await worker.fetch(
+      new Request("https://invoice.test/api/auth", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: "setup-token" }) }),
+      env,
+    );
+    expect(signIn.status).toBe(200);
+    const cookie = signIn.headers.get("set-cookie") || "";
+    expect(cookie).toContain("HttpOnly");
+    expect(cookie).toContain("SameSite=Strict");
+    const { token } = await signIn.json() as { token: string };
+
+    const cookieAuthed = await worker.fetch(new Request("https://invoice.test/api/bootstrap", { headers: { cookie: `gv_session=${token}` } }), env);
+    expect(cookieAuthed.status).not.toBe(401);
+    // The setup token is no longer a bearer credential, and ?token= is gone entirely.
+    expect((await worker.fetch(new Request("https://invoice.test/api/bootstrap", { headers: { authorization: "Bearer setup-token" } }), env)).status).toBe(401);
+    expect((await worker.fetch(new Request(`https://invoice.test/api/bootstrap?token=${token}`), env)).status).toBe(401);
+
+    await worker.fetch(new Request("https://invoice.test/api/auth/logout", { method: "POST", headers: { cookie: `gv_session=${token}` } }), env);
+    expect((await worker.fetch(new Request("https://invoice.test/api/bootstrap", { headers: { cookie: `gv_session=${token}` } }), env)).status).toBe(401);
   });
 });
 
@@ -449,6 +503,7 @@ describe("manual invoices", () => {
   /** Minimal in-memory D1 covering the statements the invoice create and portal list paths issue. */
   function manualDb() {
     const invoices: Record<string, unknown>[] = [];
+    const sessions = new Map<string, string>();
     let counter = 0;
     const db = {
       prepare(sql: string) {
@@ -465,6 +520,10 @@ describe("manual invoices", () => {
               return invoices.find((row) => row.client_id === bound[0] && row.period_start === bound[1] && row.period_end === bound[2]) || null;
             }
             if (sql.includes("FROM invoices WHERE id")) return invoices.find((row) => row.id === bound[0]) || null;
+            if (sql.includes("FROM sessions")) {
+              const expiresAt = sessions.get(String(bound[0]));
+              return expiresAt && expiresAt > String(bound[1]) ? { token_hash: bound[0] } : null;
+            }
             return null;
           },
           async all() {
@@ -473,6 +532,7 @@ describe("manual invoices", () => {
           },
           async run() {
             if (sql.includes("INSERT INTO invoices")) invoices.push(Object.fromEntries(INVOICE_COLUMNS.map((column, index) => [column, bound[index]])));
+            if (sql.startsWith("INSERT INTO sessions")) sessions.set(String(bound[0]), String(bound[2]));
             return { success: true };
           },
         };
@@ -482,20 +542,29 @@ describe("manual invoices", () => {
     return { db, invoices };
   }
 
-  function manualRequest(path: string, body: Record<string, unknown>): Request {
+  /** Signs in the way the app does, so protected routes are exercised through a real session row. */
+  async function signIn(env: never): Promise<Record<string, string>> {
+    const res = await worker.fetch(
+      new Request("https://invoice.test/api/auth", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: "admin-token" }) }),
+      env,
+    );
+    return { Authorization: `Bearer ${((await res.json()) as { token: string }).token}` };
+  }
+
+  function manualRequest(path: string, body: Record<string, unknown>, auth: Record<string, string>): Request {
     return new Request(`https://invoice.test${path}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: "Bearer admin-token" },
+      headers: { "Content-Type": "application/json", ...auth },
       body: JSON.stringify({ clientId: "client-1", periodStart: "2026-07-01", periodEnd: "2026-07-31", pricing: { model: "flat", amountCents: 250000 }, source: "manual", ...body }),
     });
   }
 
   it("rejects a manual invoice without a description", async () => {
     const env = { DB: manualDb().db, ADMIN_TOKEN: "admin-token", PORTAL_SECRET: "portal-secret" } as never;
-    const previewed = await worker.fetch(manualRequest("/api/preview", { description: "   " }), env);
+    const previewed = await worker.fetch(manualRequest("/api/preview", { description: "   " }, await signIn(env)), env);
     expect(previewed.status).toBe(400);
     expect(await previewed.json()).toEqual({ error: "Enter a description of the work performed" });
-    const created = await worker.fetch(manualRequest("/api/invoices", {}), env);
+    const created = await worker.fetch(manualRequest("/api/invoices", {}, await signIn(env)), env);
     expect(created.status).toBe(400);
     expect(await created.json()).toEqual({ error: "Enter a description of the work performed" });
   });
@@ -503,10 +572,11 @@ describe("manual invoices", () => {
   it("persists a manual invoice without reading GitHub and lists it in the client's portal", async () => {
     const { db, invoices } = manualDb();
     const env = { DB: db, ADMIN_TOKEN: "admin-token", PORTAL_SECRET: "portal-secret" } as never;
+    const auth = await signIn(env);
     const fetchMock = vi.fn(async () => new Response("{}"));
     vi.stubGlobal("fetch", fetchMock);
     try {
-      const response = await worker.fetch(manualRequest("/api/invoices", { description: MANUAL_DESCRIPTION }), env);
+      const response = await worker.fetch(manualRequest("/api/invoices", { description: MANUAL_DESCRIPTION }, auth), env);
       expect(response.status).toBe(201);
       const created = (await response.json()) as { invoice: { id: string; number: string; totalCents: number; summary: { title: string; deliverables: string[] }; activity: { commits: unknown[] } } };
       expect(fetchMock).not.toHaveBeenCalled();
@@ -532,17 +602,18 @@ describe("manual invoices", () => {
   it("round-trips the operator's work description on a reloaded manual invoice", async () => {
     const { db, invoices } = manualDb();
     const env = { DB: db, ADMIN_TOKEN: "admin-token", PORTAL_SECRET: "portal-secret" } as never;
+    const auth = await signIn(env);
     const fetchMock = vi.fn(async () => new Response("{}"));
     vi.stubGlobal("fetch", fetchMock);
     try {
-      const response = await worker.fetch(manualRequest("/api/invoices", { description: MANUAL_DESCRIPTION }), env);
+      const response = await worker.fetch(manualRequest("/api/invoices", { description: MANUAL_DESCRIPTION }, auth), env);
       expect(response.status).toBe(201);
       const created = (await response.json()) as { invoice: { id: string; manualDescription?: string } };
       expect(created.invoice.manualDescription).toBe(MANUAL_DESCRIPTION);
       expect(invoices[0].manual_description).toBe(MANUAL_DESCRIPTION);
 
       const reloaded = await worker.fetch(
-        new Request(`https://invoice.test/api/invoices/${created.invoice.id}`, { headers: { Authorization: "Bearer admin-token" } }),
+        new Request(`https://invoice.test/api/invoices/${created.invoice.id}`, { headers: auth }),
         env,
       );
       expect(reloaded.status).toBe(200);
@@ -557,11 +628,12 @@ describe("manual invoices", () => {
   it("leaves the work description empty on GitHub-sourced invoices", async () => {
     const { db, invoices } = manualDb();
     const env = { DB: db, ADMIN_TOKEN: "admin-token", PORTAL_SECRET: "portal-secret" } as never;
+    const auth = await signIn(env);
     vi.stubGlobal("fetch", vi.fn(async () => new Response("[]")));
     try {
       const request = new Request("https://invoice.test/api/invoices", {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: "Bearer admin-token" },
+        headers: { "Content-Type": "application/json", ...auth },
         body: JSON.stringify({ clientId: "client-1", periodStart: "2026-06-01", periodEnd: "2026-06-30", pricing: { model: "flat", amountCents: 250000 } }),
       });
       const response = await worker.fetch(request, env);
@@ -571,7 +643,7 @@ describe("manual invoices", () => {
       expect(invoices[0].manual_description).toBeNull();
 
       const reloaded = await worker.fetch(
-        new Request(`https://invoice.test/api/invoices/${created.invoice.id}`, { headers: { Authorization: "Bearer admin-token" } }),
+        new Request(`https://invoice.test/api/invoices/${created.invoice.id}`, { headers: auth }),
         env,
       );
       const loaded = (await reloaded.json()) as { invoice: { manualDescription?: string } };

@@ -15,7 +15,7 @@ import type {
   ProviderProfile,
   Summary,
 } from "./types";
-import { hashPortalPassword, isPortalPasswordCompatible } from "./security";
+import { SESSION_TTL_MS, generateSessionToken, hashPortalPassword, hashSessionToken, isPortalPasswordCompatible } from "./security";
 
 const DEFAULT_PROVIDER: ProviderProfile = {
   businessName: "Gitvoice",
@@ -662,4 +662,56 @@ export async function verifyOperatorToken(db: D1Database, presented: string): Pr
     if (await verifyPortalPassword(presented, row.token_hash, row.token_salt)) return { id: row.id, name: row.name, role: row.role };
   }
   return null;
+}
+
+/** Mints a session and returns the secret. Only its hash is stored, so a database dump cannot sign in. */
+export async function createSession(db: D1Database): Promise<{ token: string; expiresAt: string }> {
+  const token = generateSessionToken();
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + SESSION_TTL_MS).toISOString();
+  await db
+    .prepare("INSERT INTO sessions (token_hash, created_at, expires_at) VALUES (?, ?, ?)")
+    .bind(await hashSessionToken(token), now.toISOString(), expiresAt)
+    .run();
+  return { token, expiresAt };
+}
+
+export async function verifySession(db: D1Database, token: string): Promise<boolean> {
+  if (!token) return false;
+  const row = await db
+    .prepare("SELECT token_hash FROM sessions WHERE token_hash = ? AND expires_at > ?")
+    .bind(await hashSessionToken(token), new Date().toISOString())
+    .first<{ token_hash: string }>();
+  return Boolean(row);
+}
+
+export async function deleteSession(db: D1Database, token: string): Promise<void> {
+  if (!token) return;
+  await db.prepare("DELETE FROM sessions WHERE token_hash = ?").bind(await hashSessionToken(token)).run();
+}
+
+/** Signs every device out. Used whenever the password changes, so a stolen session dies with it. */
+export async function deleteAllSessions(db: D1Database): Promise<void> {
+  await db.prepare("DELETE FROM sessions").run();
+}
+
+export async function purgeExpiredSessions(db: D1Database): Promise<void> {
+  await db.prepare("DELETE FROM sessions WHERE expires_at <= ?").bind(new Date().toISOString()).run();
+}
+
+/**
+ * Login throttle: at most 10 attempts per address in a rolling 60s window.
+ * ponytail: sweeps the whole table on every attempt — fine while it holds tens of rows,
+ * switch to a per-address delete if login volume ever grows.
+ */
+export async function recordAuthAttempt(db: D1Database, address: string, now = Date.now()): Promise<boolean> {
+  const since = now - 60_000;
+  await db.prepare("DELETE FROM auth_attempts WHERE attempted_at <= ?").bind(since).run();
+  const row = await db
+    .prepare("SELECT COUNT(*) AS n FROM auth_attempts WHERE address = ? AND attempted_at > ?")
+    .bind(address, since)
+    .first<{ n: number }>();
+  if (Number(row?.n || 0) >= 10) return false;
+  await db.prepare("INSERT INTO auth_attempts (address, attempted_at) VALUES (?, ?)").bind(address, now).run();
+  return true;
 }

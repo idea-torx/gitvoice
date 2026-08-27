@@ -2,6 +2,12 @@ import { collectGithubActivity, emptyActivity } from "./github";
 import { formatMoney, renderInvoiceHtml } from "./invoice";
 import {
   addClientNote,
+  createSession,
+  deleteAllSessions,
+  deleteSession,
+  purgeExpiredSessions,
+  recordAuthAttempt,
+  verifySession,
   bulkUpsertClients,
   createInvoiceRow,
   deleteClient,
@@ -40,7 +46,7 @@ import {
   voidInvoice,
 } from "./repository";
 import { fallbackSummary, summarizeActivity, summarizeManualActivity } from "./summary";
-import { generateRecoveryCode, hashAdminPassword, issueAdminToken, issuePortalToken, verifyAdminPassword, verifyAdminToken, verifyPortalPassword, verifyPortalToken } from "./security";
+import { SESSION_TTL_MS, generateRecoveryCode, hashAdminPassword, issuePortalToken, verifyAdminPassword, verifyAdminToken, verifyPortalPassword, verifyPortalToken } from "./security";
 import type { ActivitySnapshot, AdminState, BillingModel, Client, ClientInput, Env, InvoiceDraft, InvoicePricing, InvoicePricingInput, InvoiceRecord, ProviderProfile, Summary, SummaryOverride } from "./types";
 
 export default {
@@ -71,31 +77,44 @@ interface InvoiceRequestBody {
   summaryOverride?: SummaryOverride;
 }
 
-const AUTH_RATE_LIMIT_MAX = 10;
-const AUTH_RATE_LIMIT_WINDOW_MS = 60_000;
-const authAttempts = new Map<string, number[]>();
+const SESSION_COOKIE = "gv_session";
 
 function clientAddress(request: Request): string {
   return request.headers.get("CF-Connecting-IP") || "local";
 }
 
 /** Records an authentication attempt. Returns false once an address exceeds 10 attempts in a rolling 60s window. */
-export function allowAuthAttempt(request: Request, now = Date.now()): boolean {
-  const address = clientAddress(request);
-  const recent = (authAttempts.get(address) || []).filter((at) => now - at < AUTH_RATE_LIMIT_WINDOW_MS);
-  const allowed = recent.length < AUTH_RATE_LIMIT_MAX;
-  if (allowed) recent.push(now);
-  authAttempts.set(address, recent);
-  if (authAttempts.size > 5000) {
-    for (const [key, attempts] of authAttempts) {
-      if (attempts.every((at) => now - at >= AUTH_RATE_LIMIT_WINDOW_MS)) authAttempts.delete(key);
-    }
-  }
-  return allowed;
+export function allowAuthAttempt(request: Request, env: Env, now = Date.now()): Promise<boolean> {
+  return recordAuthAttempt(env.DB, clientAddress(request), now);
 }
 
-export function resetAuthRateLimit(): void {
-  authAttempts.clear();
+function readSessionCookie(request: Request): string {
+  for (const part of (request.headers.get("cookie") || "").split(";")) {
+    const [name, ...value] = part.trim().split("=");
+    if (name === SESSION_COOKIE) return value.join("=");
+  }
+  return "";
+}
+
+/**
+ * Every successful sign-in answers the same way: one revocable row in `sessions`, handed to the
+ * browser as an HttpOnly cookie and to CLIs as a bearer token. Same credential, two transports.
+ */
+async function sessionResponse(env: Env, extra: Record<string, unknown> = {}): Promise<Response> {
+  const { token, expiresAt } = await createSession(env.DB);
+  const maxAge = Math.floor(SESSION_TTL_MS / 1000);
+  return json({ token, expiresAt, ...extra }, 200, {
+    "set-cookie": `${SESSION_COOKIE}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${maxAge}`,
+  });
+}
+
+async function logout(request: Request, env: Env): Promise<Response> {
+  await deleteSession(env.DB, readSessionCookie(request) || bearerToken(request));
+  return json({ ok: true }, 200, { "set-cookie": `${SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0` });
+}
+
+function bearerToken(request: Request): string {
+  return request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") || "";
 }
 
 function tooManyAttempts(): Response {
@@ -112,6 +131,7 @@ async function route(request: Request, env: Env): Promise<Response> {
 
   if (path === "/api/status" && request.method === "GET") return status(request, env);
   if (path === "/api/auth" && request.method === "POST") return authenticateAdmin(request, env);
+  if (path === "/api/auth/logout" && request.method === "POST") return logout(request, env);
   if (path === "/api/auth/recover" && request.method === "POST") return recoverAdmin(request, env);
   if (path === "/api/auth/reset" && request.method === "POST") return resetAdmin(request, env);
   if (path === "/api/setup" && request.method === "POST") return setupAdmin(request, env);
@@ -184,23 +204,23 @@ async function status(request: Request, env: Env): Promise<Response> {
 }
 
 async function authenticateAdmin(request: Request, env: Env): Promise<Response> {
-  if (!allowAuthAttempt(request)) return tooManyAttempts();
+  if (!(await allowAuthAttempt(request, env))) return tooManyAttempts();
   const body = await readJson<{ password?: string }>(request);
   const password = body.password || "";
   const admin = await getAdminState(env.DB);
   if (admin.onboarded && admin.passwordHash && admin.passwordSalt) {
     if (await verifyAdminPassword(password, admin.passwordHash, admin.passwordSalt)) {
-      return json({ token: await issueAdminToken(adminSecret(env)), requiresSetup: false });
+      return sessionResponse(env, { requiresSetup: false });
     }
   }
   if (env.ADMIN_TOKEN && constantTimeEqual(password, env.ADMIN_TOKEN)) {
-    return json({ token: await issueAdminToken(adminSecret(env)), requiresSetup: !admin.onboarded });
+    return sessionResponse(env, { requiresSetup: !admin.onboarded });
   }
   throw new Error("Unauthorized");
 }
 
 async function recoverAdmin(request: Request, env: Env): Promise<Response> {
-  if (!allowAuthAttempt(request)) return tooManyAttempts();
+  if (!(await allowAuthAttempt(request, env))) return tooManyAttempts();
   const body = await readJson<{ recoveryCode?: string; password?: string }>(request);
   const code = (body.recoveryCode || "").trim();
   const password = body.password || "";
@@ -219,11 +239,12 @@ async function recoverAdmin(request: Request, env: Env): Promise<Response> {
     recoveryHash: recoveryCreds.hash,
     recoverySalt: recoveryCreds.salt,
   });
+  await deleteAllSessions(env.DB);
   return json({ recoveryCode: newCode });
 }
 
 async function resetAdmin(request: Request, env: Env): Promise<Response> {
-  if (!allowAuthAttempt(request)) return tooManyAttempts();
+  if (!(await allowAuthAttempt(request, env))) return tooManyAttempts();
   const body = await readJson<{ adminToken?: string; recoveryCode?: string; password?: string }>(request);
   const password = body.password || "";
   assertPassword(password);
@@ -237,9 +258,8 @@ async function resetAdmin(request: Request, env: Env): Promise<Response> {
   }
   // Also allow a valid admin session token as authorization (for logged-in reset)
   if (!authorized) {
-    const url = new URL(request.url);
-    const headerToken = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") || url.searchParams.get("token") || "";
-    if (headerToken && (await verifyAdminToken(headerToken, adminSecret(env)))) authorized = true;
+    const presented = readSessionCookie(request) || bearerToken(request);
+    if (presented && ((await verifySession(env.DB, presented)) || (await verifyAdminToken(presented, adminSecret(env))))) authorized = true;
   }
   if (!authorized) throw new Error("Unauthorized: valid setup token or recovery code required");
   const passwordCreds = await hashAdminPassword(password);
@@ -253,7 +273,8 @@ async function resetAdmin(request: Request, env: Env): Promise<Response> {
     recoverySalt: recoveryCreds.salt,
     setupAt: admin.setupAt || new Date().toISOString(),
   });
-  return json({ ok: true, recoveryCode: newCode, token: await issueAdminToken(adminSecret(env)) });
+  await deleteAllSessions(env.DB);
+  return sessionResponse(env, { ok: true, recoveryCode: newCode });
 }
 
 async function setupAdmin(request: Request, env: Env): Promise<Response> {
@@ -275,7 +296,7 @@ async function setupAdmin(request: Request, env: Env): Promise<Response> {
   };
   await saveAdminState(env.DB, next);
   const provider = body.provider ? await saveProvider(env.DB, body.provider) : await getProvider(env.DB);
-  return json({ recoveryCode, provider, token: await issueAdminToken(adminSecret(env)) });
+  return sessionResponse(env, { recoveryCode, provider });
 }
 
 async function authorizeSetup(request: Request, env: Env): Promise<void> {
@@ -298,7 +319,7 @@ async function portalClients(request: Request, env: Env): Promise<Response> {
 }
 
 async function portalAuth(request: Request, env: Env): Promise<Response> {
-  if (!allowAuthAttempt(request)) return tooManyAttempts();
+  if (!(await allowAuthAttempt(request, env))) return tooManyAttempts();
   const body = await readJson<{ clientId: string; password: string }>(request);
   if (!body.clientId) throw new Error("Client is required");
   if (!body.password) throw new Error("Password is required");
@@ -656,6 +677,7 @@ async function runScheduled(time: number, env: Env): Promise<void> {
       await env.INVOICE_PDFS.put(`backups/admin-state-${new Date(time).toISOString().slice(0,10)}.json`, JSON.stringify(admin), { httpMetadata: { contentType: "application/json" } });
     }
   } catch {}
+  await purgeExpiredSessions(env.DB).catch(() => {});
   const now = new Date(time);
   const clients = await listClients(env.DB, false);
   for (const period of duePeriods(now)) {
@@ -868,11 +890,11 @@ function integerCents(value: unknown): number {
 
 async function requireAuth(request: Request, env: Env): Promise<void> {
   if (!env.ADMIN_TOKEN && !env.PORTAL_SECRET) throw new Error("ADMIN_TOKEN is not configured");
-  const url = new URL(request.url);
-  const queryToken = url.searchParams.get("token");
-  const headerToken = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
-  const presented = headerToken || queryToken || "";
-  if (env.ADMIN_TOKEN && constantTimeEqual(presented, env.ADMIN_TOKEN)) return;
+  // Cookie first: it is the browser's credential and never appears in a URL, a log, or window.name.
+  const presented = readSessionCookie(request) || bearerToken(request);
+  if (!presented) throw new Error("Unauthorized");
+  if (await verifySession(env.DB, presented)) return;
+  // Transition: stateless tokens issued before sessions existed. Remove once they have all expired.
   if (await verifyAdminToken(presented, adminSecret(env))) return;
   if (await verifyOperatorToken(env.DB, presented)) return;
   throw new Error("Unauthorized");
@@ -1107,6 +1129,6 @@ function corsHeaders(): HeadersInit {
   return { "access-control-allow-headers": "Authorization, Content-Type", "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS" };
 }
 
-function json(value: unknown, status = 200): Response {
-  return new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json; charset=utf-8", ...corsHeaders() } });
+function json(value: unknown, status = 200, extraHeaders: Record<string, string> = {}): Response {
+  return new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json; charset=utf-8", ...corsHeaders(), ...extraHeaders } });
 }

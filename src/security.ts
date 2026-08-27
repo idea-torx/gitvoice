@@ -117,3 +117,19 @@ function constantTimeEqual(left: string, right: string): boolean {
   for (let index = 0; index < left.length; index += 1) result |= left.charCodeAt(index) ^ right.charCodeAt(index);
   return result === 0;
 }
+
+/** Matches the CLI's 29-day token cache, so a machine credential never expires mid-run. */
+export const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30;
+
+/**
+ * Session tokens carry no claims: the row in `sessions` is the source of truth, which is what
+ * makes them revocable. 256 bits of entropy means there is nothing to brute force.
+ */
+export function generateSessionToken(): string {
+  return bytesToBase64Url(crypto.getRandomValues(new Uint8Array(32)));
+}
+
+/** Plain SHA-256 is right here — the input is already random, so there is no dictionary to slow down. */
+export async function hashSessionToken(token: string): Promise<string> {
+  return bytesToBase64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token))));
+}

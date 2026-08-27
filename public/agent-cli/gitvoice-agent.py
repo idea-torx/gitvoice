@@ -146,6 +146,15 @@ def cmd_auth(args):
     auth(args.base, force=True)
 
 
+def cmd_logout(args):
+    """Revokes the cached session server-side, then drops it locally."""
+    if os.path.exists(TOKEN_CACHE):
+        token = json.load(open(TOKEN_CACHE)).get("token")
+        request(args.base, "/api/auth/logout", method="POST", token=token, payload={})
+        os.remove(TOKEN_CACHE)
+    print("signed out")
+
+
 def cmd_clients(args):
     token = require_auth(args.base)
     status, boot = request(args.base, "/api/bootstrap", token=token)
@@ -811,6 +820,7 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("auth").add_argument("--force", action="store_true")
+    sub.add_parser("logout")
     sub.add_parser("clients")
 
     se = sub.add_parser("setup")
@@ -999,7 +1009,7 @@ def main():
     sub.add_parser("list")
 
     args = p.parse_args()
-    fn = {"auth": cmd_auth, "clients": cmd_clients, "client-add": cmd_client_add,
+    fn = {"auth": cmd_auth, "logout": cmd_logout, "clients": cmd_clients, "client-add": cmd_client_add,
           "client-update": cmd_client_update, "client-delete": cmd_client_delete,
           "setup": cmd_setup, "settings": cmd_settings_get, "settings-update": cmd_settings_update,
           "preview": cmd_preview, "create": cmd_create, "get": cmd_get, "pdf": cmd_pdf,
