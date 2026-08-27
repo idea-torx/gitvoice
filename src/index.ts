@@ -46,7 +46,7 @@ import {
   voidInvoice,
 } from "./repository";
 import { fallbackSummary, summarizeActivity, summarizeManualActivity } from "./summary";
-import { SESSION_TTL_MS, generateRecoveryCode, hashAdminPassword, issuePortalToken, verifyAdminPassword, verifyAdminToken, verifyPortalPassword, verifyPortalToken } from "./security";
+import { SESSION_TTL_MS, generateRecoveryCode, hashAdminPassword, issuePortalToken, verifyAdminPassword, verifyPortalPassword, verifyPortalToken } from "./security";
 import type { ActivitySnapshot, AdminState, BillingModel, Client, ClientInput, Env, InvoiceDraft, InvoicePricing, InvoicePricingInput, InvoiceRecord, ProviderProfile, Summary, SummaryOverride } from "./types";
 
 export default {
@@ -259,7 +259,7 @@ async function resetAdmin(request: Request, env: Env): Promise<Response> {
   // Also allow a valid admin session token as authorization (for logged-in reset)
   if (!authorized) {
     const presented = readSessionCookie(request) || bearerToken(request);
-    if (presented && ((await verifySession(env.DB, presented)) || (await verifyAdminToken(presented, adminSecret(env))))) authorized = true;
+    if (presented && (await verifySession(env.DB, presented))) authorized = true;
   }
   if (!authorized) throw new Error("Unauthorized: valid setup token or recovery code required");
   const passwordCreds = await hashAdminPassword(password);
@@ -894,16 +894,8 @@ async function requireAuth(request: Request, env: Env): Promise<void> {
   const presented = readSessionCookie(request) || bearerToken(request);
   if (!presented) throw new Error("Unauthorized");
   if (await verifySession(env.DB, presented)) return;
-  // Transition: stateless tokens issued before sessions existed. Remove once they have all expired.
-  if (await verifyAdminToken(presented, adminSecret(env))) return;
   if (await verifyOperatorToken(env.DB, presented)) return;
   throw new Error("Unauthorized");
-}
-
-function adminSecret(env: Env): string {
-  const secret = env.PORTAL_SECRET || env.ADMIN_TOKEN;
-  if (!secret) throw new Error("Admin secret is not configured");
-  return secret;
 }
 
 function constantTimeEqual(left: string, right: string): boolean {

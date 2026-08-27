@@ -1,7 +1,6 @@
 const PASSWORD_ITERATIONS = 100_000;
 const LEGACY_PASSWORD_ITERATIONS = 120_000;
 const PORTAL_TOKEN_TTL_MS = 1000 * 60 * 60 * 24 * 7;
-const ADMIN_TOKEN_TTL_MS = 1000 * 60 * 60 * 24 * 30;
 
 export interface PortalTokenPayload {
   clientId: string;
@@ -9,26 +8,6 @@ export interface PortalTokenPayload {
 }
 
 export { hashPortalPassword as hashAdminPassword, verifyPortalPassword as verifyAdminPassword };
-
-export async function issueAdminToken(secret: string): Promise<string> {
-  const payload = bytesToBase64Url(new TextEncoder().encode(JSON.stringify({ purpose: "admin", exp: Date.now() + ADMIN_TOKEN_TTL_MS })));
-  const signature = await sign(payload, secret);
-  return `${payload}.${signature}`;
-}
-
-export async function verifyAdminToken(token: string, secret: string): Promise<{ exp: number } | null> {
-  const [payload, signature] = token.split(".");
-  if (!payload || !signature) return null;
-  const expected = await sign(payload, secret);
-  if (!constantTimeEqual(signature, expected)) return null;
-  try {
-    const parsed = JSON.parse(new TextDecoder().decode(base64UrlToBytes(payload))) as { purpose?: string; exp?: number };
-    if (parsed.purpose !== "admin" || typeof parsed.exp !== "number" || parsed.exp < Date.now()) return null;
-    return { exp: parsed.exp };
-  } catch {
-    return null;
-  }
-}
 
 export function generateRecoveryCode(): string {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";

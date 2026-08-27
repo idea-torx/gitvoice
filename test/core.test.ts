@@ -3,7 +3,7 @@ import workerSource from "../src/index.ts?raw";
 import cliSource from "../public/agent-cli/gitvoice-agent.py?raw";
 import worker, { agingBucket, duePeriod, duePeriods } from "../src/index";
 import { renderInvoiceHtml } from "../src/invoice";
-import { hashPortalPassword, isPortalPasswordCompatible, issuePortalToken, verifyPortalPassword, verifyPortalToken, generateRecoveryCode, issueAdminToken, verifyAdminToken, hashAdminPassword, verifyAdminPassword } from "../src/security";
+import { hashPortalPassword, isPortalPasswordCompatible, issuePortalToken, verifyPortalPassword, verifyPortalToken, generateRecoveryCode, hashAdminPassword, verifyAdminPassword } from "../src/security";
 import { buildActivityDigest, buildTimeline, fallbackSummary, summarizeManualActivity } from "../src/summary";
 import { createInvoiceRow, createSession, deleteSession, normalizeGithubRepositories, recordAuthAttempt, recordPayment, verifySession } from "../src/repository";
 import { collectGithubActivity, matchesGithubAuthor } from "../src/github";
@@ -359,19 +359,6 @@ describe("client portal security", () => {
 });
 
 describe("admin authentication", () => {
-  it("issues and verifies signed admin tokens", async () => {
-    const token = await issueAdminToken("admin-secret");
-    expect(await verifyAdminToken(token, "admin-secret")).toMatchObject({ exp: expect.any(Number) });
-    expect(await verifyAdminToken(token, "wrong-secret")).toBeNull();
-  });
-
-  it("keeps admin tokens separate from portal tokens", async () => {
-    const adminToken = await issueAdminToken("shared-secret");
-    const portalToken = await issuePortalToken("client-1", "shared-secret");
-    expect(await verifyAdminToken(portalToken, "shared-secret")).toBeNull();
-    expect(await verifyPortalToken(adminToken, "shared-secret")).toBeNull();
-  });
-
   it("hashes and verifies admin passwords", async () => {
     const { hash, salt } = await hashAdminPassword("a-strong-admin-password");
     expect(hash).not.toContain("a-strong-admin-password");
