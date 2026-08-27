@@ -81,9 +81,19 @@ export interface Client {
   specialTerms: string;
   taxRate: number;
   active: boolean;
+  /** Free-form keys an agent can set without a migration. Never rendered on the invoice. */
+  metadata: Record<string, string>;
   portalPasswordSet?: boolean;
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface ClientNote {
+  id: string;
+  clientId: string;
+  body: string;
+  author: string;
+  createdAt: string;
 }
 
 export interface CommitActivity {
@@ -181,6 +191,8 @@ export interface InvoiceDraft {
   pricing: InvoicePricing;
   summary: Summary;
   activity: ActivitySnapshot;
+  /** Operator's raw work description. Set on manual invoices only; GitHub-sourced invoices leave it undefined. */
+  manualDescription?: string;
 }
 
 export interface InvoiceRecord extends InvoiceDraft {
@@ -188,8 +200,12 @@ export interface InvoiceRecord extends InvoiceDraft {
   number: string;
   status: "draft" | "generated" | "sent" | "paid" | "void";
   currency: string;
-  /** Operator's raw work description. Set on manual invoices only; GitHub-sourced invoices leave it undefined. */
-  manualDescription?: string;
+  /** Payment state. `amountPaidCents` accumulates, so a part payment leaves the status alone. */
+  paidAt?: string;
+  amountPaidCents?: number;
+  paymentReference?: string;
+  paymentChannel?: string;
+  sentAt?: string;
   pdfKey?: string | null;
   createdAt?: string;
   version?: number;
@@ -221,6 +237,7 @@ export interface ClientInput {
   paymentDays?: number;
   specialTerms?: string;
   taxRate?: number;
+  metadata?: Record<string, unknown>;
   portalPassword?: string;
   active?: boolean;
 }
@@ -274,6 +291,7 @@ export interface D1ClientRow {
   created_at?: string;
   updated_at?: string;
   default_hours?: number | null;
+  metadata?: string | null;
 }
 
 export interface D1InvoiceRow {
@@ -293,9 +311,23 @@ export interface D1InvoiceRow {
   summary_json: string;
   activity_json: string;
   manual_description?: string | null;
+  paid_at?: string | null;
+  amount_paid_cents?: number | null;
+  payment_reference?: string | null;
+  payment_channel?: string | null;
+  sent_at?: string | null;
+  reminded_at?: string | null;
   pdf_key?: string | null;
   created_at?: string;
   version?: number;
+}
+
+export interface D1ClientNoteRow {
+  id: string;
+  client_id: string;
+  body: string;
+  author: string;
+  created_at: string;
 }
 
 export interface InvoiceDispute {

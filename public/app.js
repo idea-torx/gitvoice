@@ -645,7 +645,15 @@ function renderInvoices() {
     if (statusFilter === "disputed") filtered = filtered.filter(inv => !!inv.dispute);
     else filtered = filtered.filter(inv => inv.status === statusFilter);
   }
-  $("#archiveCount").textContent = `${filtered.length} invoice${filtered.length === 1 ? "" : "s"}${(q||statusFilter)?` / ${state.invoices.length}`:""}`;
+  // Money still owed across every unpaid invoice, per currency — the number worth seeing first.
+  const owed = new Map();
+  for (const inv of state.invoices) {
+    if (inv.status === "void" || inv.status === "paid") continue;
+    const balance = Number(inv.balanceCents ?? inv.totalCents) || 0;
+    if (balance > 0) owed.set(inv.currency, (owed.get(inv.currency) || 0) + balance);
+  }
+  const owedLabel = [...owed.entries()].sort((a, b) => b[1] - a[1]).map(([cur, cents]) => formatMoney(cents, cur)).join(" + ");
+  $("#archiveCount").textContent = `${filtered.length} invoice${filtered.length === 1 ? "" : "s"}${(q||statusFilter)?` / ${state.invoices.length}`:""}${owedLabel ? ` · ${owedLabel} outstanding` : ""}`;
   if (!filtered.length) {
     if (q || statusFilter) { root.innerHTML = `<div class="empty-state"><span>∅</span><p>No invoices match.</p></div>`; return; }
     root.innerHTML = `<div class="empty-state"><span>⌁</span><p>Generated invoices will land here.</p></div>`;
@@ -654,7 +662,7 @@ function renderInvoices() {
   root.innerHTML = filtered.slice(0, 12).map((invoice) => {
     const isVoid = invoice.status === 'void';
     const versionBadge = invoice.version && invoice.version > 1 ? `<span class="muted" style="font-size:11px">v${invoice.version}</span>` : '';
-    return `<article class="invoice-row"><div><div class="invoice-number">${esc(invoice.number)} ${versionBadge}</div><div class="invoice-client">${esc(invoice.client.name)}</div></div><div class="invoice-period">${formatDate(invoice.periodStart)} - ${formatDate(invoice.periodEnd)}</div><div><div class="invoice-total">${formatMoney(invoice.totalCents, invoice.currency)}</div><div class="invoice-status ${invoice.dispute ? "invoice-status-disputed" : (isVoid?"invoice-status-void":"")}">${isVoid ? "Void" : invoice.dispute ? "Disputed" : esc(invoice.status || "generated")}</div></div><div class="invoice-actions" style="flex-wrap:wrap;gap:6px"><button class="invoice-open" type="button" data-open-invoice="${esc(invoice.id)}">View</button><button type="button" data-edit-invoice="${esc(invoice.id)}">Edit</button><button type="button" data-versions-invoice="${esc(invoice.id)}">Versions</button>${isVoid ? `<button type="button" data-reissue-invoice="${esc(invoice.id)}">Reissue</button>` : `<button type="button" data-void-invoice="${esc(invoice.id)}">Void</button>`}<button type="button" data-notify-invoice="${esc(invoice.id)}" title="Email via Cloudflare Email beta">Notify</button><a class="invoice-download" href="/api/invoices/${encodeURIComponent(invoice.id)}/pdf?token=${encodeURIComponent(state.token)}" download>PDF ↓</a><button class="invoice-delete" type="button" data-delete-invoice="${esc(invoice.id)}" aria-label="Delete ${esc(invoice.number)}">Delete</button></div></article>`;
+    return `<article class="invoice-row"><div><div class="invoice-number">${esc(invoice.number)} ${versionBadge}</div><div class="invoice-client">${esc(invoice.client.name)}</div></div><div class="invoice-period">${formatDate(invoice.periodStart)} - ${formatDate(invoice.periodEnd)}</div><div><div class="invoice-total">${formatMoney(invoice.totalCents, invoice.currency)}</div><div class="invoice-status ${invoice.dispute ? "invoice-status-disputed" : (isVoid?"invoice-status-void":"")}">${isVoid ? "Void" : invoice.dispute ? "Disputed" : esc(invoice.status || "generated")}</div></div><div class="invoice-actions" style="flex-wrap:wrap;gap:6px"><button class="invoice-open" type="button" data-open-invoice="${esc(invoice.id)}">View</button><button type="button" data-edit-invoice="${esc(invoice.id)}">Edit</button><button type="button" data-versions-invoice="${esc(invoice.id)}">Versions</button>${isVoid ? `<button type="button" data-reissue-invoice="${esc(invoice.id)}">Reissue</button>` : `<button type="button" data-void-invoice="${esc(invoice.id)}">Void</button>`}${isVoid || invoice.status === "paid" ? "" : `<button type="button" data-paid-invoice="${esc(invoice.id)}">Mark paid</button>`}<button type="button" data-notify-invoice="${esc(invoice.id)}" title="Email via Cloudflare Email beta">Notify</button><a class="invoice-download" href="/api/invoices/${encodeURIComponent(invoice.id)}/pdf?token=${encodeURIComponent(state.token)}" download>PDF ↓</a><button class="invoice-delete" type="button" data-delete-invoice="${esc(invoice.id)}" aria-label="Delete ${esc(invoice.number)}">Delete</button></div></article>`;
   }).join("");
   $$('[data-open-invoice]').forEach((button) => button.addEventListener("click", () => openInvoiceModal(button.dataset.openInvoice)));
   $$('[data-delete-invoice]').forEach((button) => button.addEventListener("click", () => deleteInvoice(button.dataset.deleteInvoice, button)));
@@ -663,6 +671,7 @@ function renderInvoices() {
   $$('[data-edit-invoice]').forEach((button) => button.addEventListener("click", () => openInvoiceEditModal(button.dataset.editInvoice)));
   $$('[data-versions-invoice]').forEach((button) => button.addEventListener("click", () => openVersionsModal(button.dataset.versionsInvoice)));
   $$('[data-notify-invoice]').forEach((button) => button.addEventListener("click", () => notifyInvoice(button.dataset.notifyInvoice, button)));
+  $$('[data-paid-invoice]').forEach((button) => button.addEventListener("click", () => markPaidAction(button.dataset.paidInvoice)));
 }
 
 
@@ -817,6 +826,21 @@ async function submitTime(event){
 async function voidInvoiceAction(id){
   if(!confirm("Void "+id+"?")) return;
   try{ await api(`/api/invoices/${encodeURIComponent(id)}/void`,{method:"POST"}); toast("Voided"); await refreshInvoices(); }catch(e){ toast(e.message); }
+}
+async function markPaidAction(id){
+  const inv=state.invoices.find(i=>i.id===id); if(!inv) return toast("Invoice not found");
+  const owed=Number(inv.balanceCents ?? inv.totalCents);
+  const entered=prompt(`Amount received for ${inv.number} (${inv.currency}), blank for the full ${formatMoney(owed, inv.currency)}:`, "");
+  if(entered===null) return;
+  const body={channel:"manual"};
+  if(entered.trim()){
+    const amount=Math.round(Number(entered.replace(/[^0-9.]/g,""))*100);
+    if(!Number.isFinite(amount)||amount<=0) return toast("Enter an amount like 1250.00");
+    body.amountCents=amount;
+  }
+  const reference=prompt("Payment reference (e-transfer confirmation, wire ref, cheque no.):", "");
+  if(reference) body.reference=reference;
+  try{ await api(`/api/invoices/${encodeURIComponent(id)}/paid`,{method:"POST",body}); toast("Payment recorded"); await refreshInvoices(); }catch(e){ toast(e.message); }
 }
 async function reissueInvoiceAction(id){
   try{ await api(`/api/invoices/${encodeURIComponent(id)}/reissue`,{method:"POST"}); toast("Reissued"); await refreshInvoices(); }catch(e){ toast(e.message); }

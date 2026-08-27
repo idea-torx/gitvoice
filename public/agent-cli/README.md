@@ -27,7 +27,9 @@ ships without one.
 | `time` / `time-import` | Read or load a client's time entries |
 | `preview` / `create` | Generate LLM-written invoice drafts; finalize (idempotent per billing period) |
 | `get` / `list` / `versions` / `invoice-delete` | Inspect (`--html` for the rendered invoice), list, diff versions, remove |
-| `summary-patch` | Rewrite an issued invoice's summary — bumps the version, keeps history |
+| `summary-patch` | Rewrite an issued invoice's summary or `--desc` — bumps the version, keeps history |
+| `mark-paid` / `outstanding` | Record an e-transfer/wire/cheque payment; list what is still owed, by age |
+| `notes` / `note-add` | Read and append internal notes on a client |
 | `void` / `reissue` / `notify` | Void, reissue, or email an invoice to the client |
 | `pdf` | Download the invoice PDF |
 | `backup` / `watch` | JSON snapshot + every invoice PDF, with manifest; on a timer |
@@ -37,12 +39,19 @@ ships without one.
 `client-add` / `client-update` cover the whole profile: `--name` (the company billed on the
 invoice), `--first-name` / `--last-name` (the person addressed at it), `--email`, `--phone`,
 `--address`, `--website`, `--currency`, `--payment-method etransfer|wire|alternative`,
-`--model hourly|flat`, `--rate-cents`. Unset flags on `client-update` leave the stored value alone.
+`--model hourly|flat`, `--rate-cents`, and `--meta key=value` (repeatable) for agent-set fields that
+never appear on the invoice. Unset flags on `client-update` leave the stored value alone.
 
 `preview` / `create` take `--desc` for a manual work description; **omit it** and the worker
 summarizes the client's GitHub activity instead. Either way `--title`, `--overview`,
 `--highlight`, `--deliverable`, `--next-step` (repeatable) and `--summary-file` override what
-the model wrote, before the invoice is finalized.
+the model wrote, before the invoice is finalized. After the fact, `summary-patch --desc` rewrites
+the description on an issued invoice.
+
+`mark-paid --id <id>` settles the remaining balance; pass `--amount-cents` for a part payment
+(the invoice stays unpaid until the running total clears it), plus `--reference` and
+`--channel etransfer|wire|cheque`. `outstanding` lists every unpaid invoice bucketed
+current / 1-30 / 31-60 / 60+ with a total owed per currency.
 
 ## Auth
 

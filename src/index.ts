@@ -1,6 +1,7 @@
 import { collectGithubActivity, emptyActivity } from "./github";
 import { formatMoney, renderInvoiceHtml } from "./invoice";
 import {
+  addClientNote,
   bulkUpsertClients,
   createInvoiceRow,
   deleteClient,
@@ -13,16 +14,21 @@ import {
   getPortalCredentials,
   getProvider,
   importTimeEntries,
+  listClientNotes,
   listClients,
   listInvoiceDisputes,
   listInvoices,
   listInvoicesForClient,
   listInvoiceVersions,
   listOperators,
+  listOutstandingInvoices,
   listTimeEntries,
   createOperator,
   verifyOperatorToken,
   markInvoicePaid,
+  markInvoiceReminded,
+  markInvoiceSent,
+  recordPayment,
   nextInvoiceNumber,
   reissueInvoice,
   rowToInvoice,
@@ -129,12 +135,16 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === "/api/clients/discover" && request.method === "POST") return discoverClients(request, env);
   if (path.startsWith("/api/clients/") && path.endsWith("/time") && request.method === "GET") return getTimeEntries(request, env);
   if (path.startsWith("/api/clients/") && path.endsWith("/time/import") && request.method === "POST") return importTime(request, env);
+  if (path.startsWith("/api/clients/") && path.endsWith("/notes") && request.method === "GET") return listNotesRoute(env, path.split("/")[3]);
+  if (path.startsWith("/api/clients/") && path.endsWith("/notes") && request.method === "POST") return addNoteRoute(request, env, path.split("/")[3]);
   if (path === "/api/clients" && request.method === "POST") return saveClient(request, env);
   if (path.startsWith("/api/clients/") && request.method === "PUT") return saveClient(request, env, path.split("/").pop());
   if (path.startsWith("/api/clients/") && request.method === "DELETE") return removeClient(env, path.split("/").pop());
   if (path === "/api/preview" && request.method === "POST") return previewInvoice(request, env);
   if (path === "/api/invoices" && request.method === "POST") return createInvoice(request, env);
   if (path === "/api/invoices" && request.method === "GET") return listInvoiceJson(env);
+  if (path === "/api/outstanding" && request.method === "GET") return outstandingRoute(env);
+  if (path.startsWith("/api/invoices/") && path.endsWith("/paid") && request.method === "POST") return recordPaymentRoute(request, env, path.split("/")[3]);
   if (path.startsWith("/api/invoices/") && path.endsWith("/pdf") && request.method === "GET") return invoicePdf(request, env, path.split("/")[3]);
   if (path.startsWith("/api/invoices/") && path.endsWith("/void") && request.method === "POST") return voidInvoiceRoute(env, path.split("/")[3]);
   if (path.startsWith("/api/invoices/") && path.endsWith("/reissue") && request.method === "POST") return reissueInvoiceRoute(env, path.split("/")[3]);
@@ -453,6 +463,65 @@ async function listInvoiceJson(env: Env): Promise<Response> {
   return json({ invoices });
 }
 
+/** Days past the due date → the aging bucket the balance is reported in. */
+export function agingBucket(daysOverdue: number): "current" | "1-30" | "31-60" | "60+" {
+  if (daysOverdue <= 0) return "current";
+  if (daysOverdue <= 30) return "1-30";
+  if (daysOverdue <= 60) return "31-60";
+  return "60+";
+}
+
+async function outstandingRoute(env: Env, now = Date.now()): Promise<Response> {
+  const rows = await listOutstandingInvoices(env.DB);
+  const invoices = [];
+  const totals: Record<string, Record<string, number>> = {};
+  for (const row of rows) {
+    const client = await getClient(env.DB, row.client_id);
+    const daysOverdue = Math.floor((now - Date.parse(row.due_at)) / 86400000);
+    const bucket = agingBucket(daysOverdue);
+    const balanceCents = row.total_cents - Number(row.amount_paid_cents || 0);
+    invoices.push({
+      id: row.id,
+      number: row.number,
+      clientId: row.client_id,
+      client: client?.name || "Unknown client",
+      status: row.status,
+      currency: row.currency,
+      totalCents: row.total_cents,
+      amountPaidCents: Number(row.amount_paid_cents || 0),
+      balanceCents,
+      dueAt: row.due_at,
+      daysOverdue: Math.max(0, daysOverdue),
+      bucket,
+    });
+    const byBucket = (totals[row.currency] ||= { current: 0, "1-30": 0, "31-60": 0, "60+": 0, total: 0 });
+    byBucket[bucket] += balanceCents;
+    byBucket.total += balanceCents;
+  }
+  return json({ invoices, totals });
+}
+
+async function recordPaymentRoute(request: Request, env: Env, id?: string): Promise<Response> {
+  if (!id) throw new Error("Invoice id is required");
+  const body = await readJson<{ amountCents?: number; reference?: string; channel?: string; paidAt?: string }>(request);
+  const row = await recordPayment(env.DB, id, body);
+  const client = await getClient(env.DB, row.client_id);
+  if (!client) throw new Error("Invoice client not found");
+  return json({ invoice: publicInvoice(rowToInvoice(row, client, await getProvider(env.DB))) });
+}
+
+async function listNotesRoute(env: Env, clientId?: string): Promise<Response> {
+  if (!clientId) throw new Error("Client id is required");
+  return json({ notes: await listClientNotes(env.DB, clientId) });
+}
+
+async function addNoteRoute(request: Request, env: Env, clientId?: string): Promise<Response> {
+  if (!clientId) throw new Error("Client id is required");
+  if (!(await getClient(env.DB, clientId))) throw new Error("Client not found");
+  const body = await readJson<{ body?: string; author?: string }>(request);
+  return json({ note: await addClientNote(env.DB, clientId, body.body || "", body.author || "") }, 201);
+}
+
 async function invoiceJson(env: Env, id?: string): Promise<Response> {
   const invoice = await loadInvoice(env, id);
   return json({ invoice: publicInvoice(invoice) });
@@ -534,6 +603,7 @@ async function buildDraft(env: Env, clientId: string, periodStart: string, perio
     pricing,
     summary,
     activity,
+    manualDescription: manualDescription || undefined,
   };
 }
 
@@ -628,6 +698,33 @@ async function runScheduled(time: number, env: Env): Promise<void> {
       }
     }
   }
+  await sendOverdueReminders(env, now);
+}
+
+const REMINDER_INTERVAL_DAYS = 7;
+
+/** Nudges every overdue invoice once a week. Runs on the same daily cron as invoice generation. */
+async function sendOverdueReminders(env: Env, now: Date): Promise<void> {
+  let rows: Awaited<ReturnType<typeof listOutstandingInvoices>> = [];
+  try {
+    rows = await listOutstandingInvoices(env.DB, now.toISOString());
+  } catch (error) {
+    console.error("Overdue reminder scan failed", error);
+    return;
+  }
+  const provider = await getProvider(env.DB);
+  for (const row of rows) {
+    const lastReminder = row.reminded_at ? Date.parse(row.reminded_at) : NaN;
+    if (Number.isFinite(lastReminder) && now.getTime() - lastReminder < REMINDER_INTERVAL_DAYS * 86400000) continue;
+    try {
+      const client = await getClient(env.DB, row.client_id);
+      if (!client?.email) continue;
+      const result = await sendInvoiceEmail(env, rowToInvoice(row, client, provider), "reminder");
+      if (result.sent) await markInvoiceReminded(env.DB, row.id);
+    } catch (error) {
+      console.error(`Overdue reminder failed for ${row.id}`, error);
+    }
+  }
 }
 
 export function duePeriod(now: Date): { cadence: "weekly" | "monthly"; start: string; end: string } | null {
@@ -663,10 +760,19 @@ function publicInvoice(invoice: InvoiceRecord | InvoiceDraft, dispute: unknown =
     subtotalCents: invoice.subtotalCents,
     taxCents: invoice.taxCents,
     totalCents: invoice.totalCents,
+    ...("amountPaidCents" in invoice
+      ? {
+          amountPaidCents: invoice.amountPaidCents || 0,
+          balanceCents: invoice.totalCents - (invoice.amountPaidCents || 0),
+          paidAt: invoice.paidAt || null,
+          paymentReference: invoice.paymentReference || "",
+          paymentChannel: invoice.paymentChannel || "",
+          sentAt: invoice.sentAt || null,
+        }
+      : {}),
     pricing: invoice.pricing,
     summary: invoice.summary,
-    // Admin-only: the raw work description never reaches the client-facing invoice or portal.
-    ...("manualDescription" in invoice && invoice.manualDescription ? { manualDescription: invoice.manualDescription } : {}),
+    ...(invoice.manualDescription ? { manualDescription: invoice.manualDescription } : {}),
     activity: {
       commits: invoice.activity.commits,
       repositories: invoice.activity.repositories,
@@ -854,10 +960,14 @@ async function patchInvoiceSummary(request: Request, env: Env, id?: string): Pro
   if (!row) throw new Error("Invoice not found");
   const client = await getClient(env.DB, row.client_id);
   if (!client) throw new Error("Invoice client not found");
-  const body = await readJson<SummaryOverride>(request);
+  const body = await readJson<SummaryOverride & { description?: string }>(request);
   const current = rowToInvoice(row, client, await getProvider(env.DB));
   const patchedSummary = applySummaryOverride(current.summary, body);
-  await env.DB.prepare("UPDATE invoices SET summary_json = ?, version = version + 1 WHERE id = ?").bind(JSON.stringify(patchedSummary), id).run();
+  // The operator's own description is the invoice's evidence on a manual invoice, so it stays editable.
+  const description = typeof body.description === "string" ? body.description.trim() : undefined;
+  await env.DB.prepare("UPDATE invoices SET summary_json = ?, manual_description = ?, version = version + 1 WHERE id = ?")
+    .bind(JSON.stringify(patchedSummary), description === undefined ? row.manual_description ?? null : description || null, id)
+    .run();
   await env.DB.prepare("INSERT INTO invoice_versions (id, invoice_id, version, status, summary_json, pricing_json) VALUES (?, ?, ?, ?, ?, ?)").bind(crypto.randomUUID(), id, current.version || 1, current.status, JSON.stringify(current.summary), JSON.stringify(current.pricing)).run();
   const updated = await getInvoiceRow(env.DB, id);
   if (!updated) throw new Error("Invoice not found after patch");
@@ -891,18 +1001,21 @@ async function stripeWebhook(request: Request, env: Env): Promise<Response> {
 }
 
 
-async function sendInvoiceEmail(env: Env, invoice: InvoiceRecord): Promise<{ sent: boolean; reason?: string }> {
+async function sendInvoiceEmail(env: Env, invoice: InvoiceRecord, kind: "new" | "reminder" = "new"): Promise<{ sent: boolean; reason?: string }> {
   if (!env.EMAIL) return { sent: false, reason: "EMAIL binding not configured (Cloudflare Email beta not enabled)" };
   if (!invoice.client.email) return { sent: false, reason: "Client has no email" };
   const from = invoice.provider.email || "noreply@gitvoice.dev";
   const to = invoice.client.email;
-  const subject = `Invoice ${invoice.number} — ${invoice.client.name} — ${invoice.provider.businessName}`;
+  const reminder = kind === "reminder";
+  const subject = reminder
+    ? `Reminder: invoice ${invoice.number} is past due — ${invoice.provider.businessName}`
+    : `Invoice ${invoice.number} — ${invoice.client.name} — ${invoice.provider.businessName}`;
   const portalUrl = `${(env.APP_ORIGIN || "https://invoicer-pro.ideatorx.workers.dev").replace(/\/$/, "")}/portal`;
   const invoiceUrl = `${(env.APP_ORIGIN || "https://invoicer-pro.ideatorx.workers.dev").replace(/\/$/, "")}/invoice/${invoice.id}`;
   const html = `<!doctype html><html><body style="font-family:system-ui, sans-serif; color:#1d1d1f; line-height:1.6; max-width:640px; margin:0 auto; padding:24px">
     <h2 style="margin:0 0 8px">${invoice.provider.businessName} — Invoice ${invoice.number}</h2>
     <p style="color:#6e6e73">Hi ${invoice.client.name},</p>
-    <p>Your invoice for <strong>${invoice.periodStart} → ${invoice.periodEnd}</strong> is ready.</p>
+    <p>${reminder ? `This is a friendly reminder that this invoice was due on <strong>${invoice.dueAt.slice(0, 10)}</strong> and is still showing as unpaid.` : `Your invoice for <strong>${invoice.periodStart} → ${invoice.periodEnd}</strong> is ready.`}</p>
     <p><strong>${invoice.summary.title}</strong><br/>${invoice.summary.overview.slice(0, 280)}</p>
     <p>Total: <strong>${formatMoney(invoice.totalCents, invoice.currency)}</strong> · ${invoice.pricing.description}</p>
     <p><a href="${invoiceUrl}?token=PORTAL_TOKEN_PLACEHOLDER" style="display:inline-block; background:#0071e3; color:#fff; padding:10px 18px; border-radius:999px; text-decoration:none">View invoice</a></p>
@@ -924,16 +1037,28 @@ async function sendInvoiceEmail(env: Env, invoice: InvoiceRecord): Promise<{ sen
   try {
     const msg = new EmailMessageCtor(from, to, `From: ${from}\r\nTo: ${to}\r\nSubject: ${subject}\r\nContent-Type: text/html; charset=utf-8\r\n\r\n${html}`);
     await (env.EMAIL as unknown as { send: (m: unknown) => Promise<void> }).send(msg);
+    await noteDelivery(env, invoice);
     return { sent: true };
   } catch (e) {
     console.error("Email send failed", e);
     try {
       const msg2 = new EmailMessageCtor(from, to, text);
       await (env.EMAIL as unknown as { send: (m: unknown) => Promise<void> }).send(msg2);
+      await noteDelivery(env, invoice);
       return { sent: true };
     } catch (e2) {
       return { sent: false, reason: e2 instanceof Error ? e2.message : String(e2) };
     }
+  }
+}
+
+/** Every successful send routes through here, so `sent` is never a status nothing sets. */
+async function noteDelivery(env: Env, invoice: InvoiceRecord): Promise<void> {
+  if (!invoice.id) return;
+  try {
+    await markInvoiceSent(env.DB, invoice.id);
+  } catch (error) {
+    console.error("Could not record invoice delivery", error);
   }
 }
 

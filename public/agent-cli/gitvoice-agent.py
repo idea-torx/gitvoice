@@ -160,7 +160,20 @@ def cmd_clients(args):
         print(f"{c.get('id',''):<40} {c.get('name',''):<28} {c.get('billingModel',''):<12} {c.get('currency',''):<8} {c.get('defaultRateCents',''):<8} {'active' if c.get('active') else 'INACTIVE'}")
 
 
-def build_body(args):
+def resolve_client_id(base, token, value):
+    """Resolve an exact case-insensitive client name or accept a client ID."""
+    status, boot = request(base, "/api/bootstrap", token=token)
+    if status != 200:
+        die(f"bootstrap failed (HTTP {status}): {boot}")
+    exact = [c for c in boot.get("clients", []) if c.get("id") == value or c.get("name", "").casefold() == value.casefold()]
+    if len(exact) == 1:
+        return exact[0]["id"]
+    if len(exact) > 1:
+        die(f"ambiguous client name: {value!r}; use the client ID")
+    die(f"client not found: {value!r}; run `clients` to list clients")
+
+
+def build_body(args, client_id=None):
     pricing = None
     if getattr(args, "hours", None) is not None or getattr(args, "rate_cents", None) is not None or getattr(args, "amount_cents", None) is not None:
         pricing = {}
@@ -171,7 +184,7 @@ def build_body(args):
             if getattr(args, "hours", None) is not None:
                 pricing["hours"] = args.hours
     body = {
-        "clientId": args.client,
+        "clientId": client_id or args.client,
         "periodStart": args.start,
         "periodEnd": args.end,
         "pricing": pricing,
@@ -211,7 +224,8 @@ def summary_override_from(args):
 
 def cmd_preview(args):
     token = require_auth(args.base)
-    status, data = request(args.base, "/api/preview", method="POST", token=token, payload=build_body(args))
+    client_id = resolve_client_id(args.base, token, args.client)
+    status, data = request(args.base, "/api/preview", method="POST", token=token, payload=build_body(args, client_id))
     if status != 200:
         die(f"preview failed (HTTP {status}): {data}")
     inv = data.get("invoice", {})
@@ -227,7 +241,7 @@ def cmd_preview(args):
     }, indent=2, default=str))
     # cache the draft so `create` can reuse pricing+summary without regenerating
     os.makedirs(STATE_DIR, exist_ok=True)
-    json.dump({"base": args.base, **build_body(args), "draft": inv},
+    json.dump({"base": args.base, **build_body(args, client_id), "draft": inv},
               open(os.path.join(STATE_DIR, "gitvoice-draft.json"), "w"))
     os.chmod(os.path.join(STATE_DIR, "gitvoice-draft.json"), 0o600)
     print("\n[draft cached — run create with the same args to finalize]")
@@ -237,9 +251,10 @@ def cmd_create(args):
     if not args.yes:
         die("create requires --yes (financial action). Run `preview` first to review the draft.")
     token = require_auth(args.base)
+    client_id = resolve_client_id(args.base, token, args.client)
     # Direct create: the worker generates the summary and short-circuits with
     # existing:true if the period is already invoiced (no LLM call for dupes).
-    status, created = request(args.base, "/api/invoices", method="POST", token=token, payload=build_body(args))
+    status, created = request(args.base, "/api/invoices", method="POST", token=token, payload=build_body(args, client_id))
     if status not in (200, 201):
         die(f"create failed (HTTP {status}): {created}")
     inv2 = (created or {}).get("invoice", {})
@@ -294,7 +309,11 @@ PAYMENT_METHODS = ["etransfer", "wire", "alternative"]
 CLIENT_FIELD_FLAGS = [
     ("name", "name"), ("first_name", "contactFirstName"), ("last_name", "contactLastName"),
     ("email", "email"), ("phone", "phone"), ("address", "address"), ("website", "website"),
-    ("currency", "currency"), ("payment_method", "paymentMethod"),
+    ("github_repo", "githubRepos"), ("github_author", "githubAuthor"),
+    ("project_context", "projectContext"), ("summary_priorities", "summaryPriorities"),
+    ("currency", "currency"), ("payment_method", "paymentMethod"), ("payment_days", "paymentDays"),
+    ("payment_terms", "paymentTerms"), ("cadence", "cadence"), ("billing_day", "billingDay"),
+    ("tax_rate", "taxRate"), ("special_terms", "specialTerms"),
     ("model", "billingModel"), ("rate_cents", "defaultRateCents"), ("active", "active"),
 ]
 
@@ -305,12 +324,15 @@ def cmd_client_add(args):
         "name": args.name, "email": args.email, "address": args.address or "",
         "contactFirstName": args.first_name or "", "contactLastName": args.last_name or "",
         "phone": args.phone or "", "website": args.website or "",
-        "githubRepos": [], "githubAuthor": "", "projectContext": "",
-        "summaryPriorities": "", "currency": args.currency,
+        "githubRepos": args.github_repo or [], "githubAuthor": args.github_author or "",
+        "projectContext": args.project_context or "", "summaryPriorities": args.summary_priorities or "",
+        "currency": args.currency,
         "billingModel": args.model, "defaultRateCents": args.rate_cents,
-        "taxRate": 0, "cadence": "manual", "paymentMethod": args.payment_method,
-        "paymentDays": 0, "paymentTerms": "Due on receipt",
-        "specialTerms": "", "active": True,
+        "taxRate": args.tax_rate, "cadence": args.cadence, "billingDay": args.billing_day,
+        "paymentMethod": args.payment_method,
+        "paymentDays": args.payment_days, "paymentTerms": args.payment_terms,
+        "specialTerms": args.special_terms, "active": True,
+        "metadata": metadata_from(args.meta),
     }
     if getattr(args, "portal_password", None):
         payload["portalPassword"] = args.portal_password
@@ -334,7 +356,20 @@ def client_payload_from(c):
         "cadence": c.get("cadence", "manual"), "paymentMethod": c.get("paymentMethod", "wire"),
         "paymentDays": c.get("paymentDays", 0), "paymentTerms": c.get("paymentTerms", "Due on receipt"),
         "specialTerms": c.get("specialTerms", ""), "active": c.get("active", True),
+        # Carried forward: the upsert is a full replace, so omitting this erases the client's metadata.
+        "metadata": c.get("metadata") or {},
     }
+
+
+def metadata_from(pairs, existing=None):
+    """`--meta key=value` pairs merged onto whatever the client already carries."""
+    merged = dict(existing or {})
+    for pair in pairs or []:
+        key, sep, value = pair.partition("=")
+        if not sep or not key.strip():
+            die(f"--meta expects key=value, got {pair!r}")
+        merged[key.strip()] = value.strip()
+    return merged
 
 
 def cmd_client_update(args):
@@ -342,17 +377,19 @@ def cmd_client_update(args):
     status, boot = request(args.base, "/api/bootstrap", token=token)
     if status != 200:
         die(f"bootstrap failed (HTTP {status}): {boot}")
-    target = next((c for c in boot.get("clients", []) if c.get("id") == args.id), None)
+    target = next((c for c in boot.get("clients", []) if c.get("id") == args.id or c.get("name", "").casefold() == args.id.casefold()), None)
     if not target:
-        die(f"client {args.id} not found")
+        die(f"client not found: {args.id!r}; run `clients` to list clients")
+    client_id = target["id"]
     payload = client_payload_from(target)
     for dest, key in CLIENT_FIELD_FLAGS:
         value = getattr(args, dest, None)
         if value is not None:
             payload[key] = value
+    payload["metadata"] = metadata_from(args.meta, payload.get("metadata"))
     if getattr(args, "portal_password", None):
         payload["portalPassword"] = args.portal_password
-    status, data = request(args.base, f"/api/clients/{args.id}", method="PUT", token=token, payload=payload)
+    status, data = request(args.base, f"/api/clients/{client_id}", method="PUT", token=token, payload=payload)
     if status != 200:
         die(f"client-update failed (HTTP {status}): {data}")
     c = data.get("client", data)
@@ -644,10 +681,70 @@ def cmd_notify(args):
     print(json.dumps(data or {}, indent=2))
 
 
+def cmd_mark_paid(args):
+    """Record an e-transfer/wire payment. Omit --amount-cents to settle the remaining balance."""
+    token = require_auth(args.base)
+    payload = {"reference": args.reference or "", "channel": args.channel}
+    if args.amount_cents is not None:
+        payload["amountCents"] = args.amount_cents
+    if args.paid_at:
+        payload["paidAt"] = args.paid_at
+    status, data = request(args.base, f"/api/invoices/{args.id}/paid", method="POST", token=token, payload=payload)
+    if status != 200:
+        die(f"mark-paid failed (HTTP {status}): {data}")
+    inv = (data or {}).get("invoice", data) or {}
+    print(json.dumps({"id": inv.get("id"), "number": inv.get("number"), "status": inv.get("status"),
+                      "totalCents": inv.get("totalCents"), "amountPaidCents": inv.get("amountPaidCents"),
+                      "balanceCents": inv.get("balanceCents"), "paidAt": inv.get("paidAt")}, indent=2, default=str))
+
+
+def cmd_outstanding(args):
+    token = require_auth(args.base)
+    status, data = request(args.base, "/api/outstanding", token=token)
+    if status != 200:
+        die(f"outstanding failed (HTTP {status}): {data}")
+    if args.json:
+        print(json.dumps(data or {}, indent=2, default=str))
+        return
+    invoices = (data or {}).get("invoices", [])
+    if not invoices:
+        print("nothing outstanding")
+        return
+    for inv in invoices:
+        print(f"{inv.get('number',''):<12} {str(inv.get('client','')):<24} "
+              f"{inv.get('currency','')} {inv.get('balanceCents',0)/100:>10.2f}  "
+              f"due {str(inv.get('dueAt',''))[:10]}  {inv.get('bucket',''):<8} {inv.get('id','')}")
+    for currency, totals in ((data or {}).get("totals", {})).items():
+        print(f"\n{currency} owed {totals.get('total',0)/100:.2f}  "
+              f"(current {totals.get('current',0)/100:.2f} · 1-30 {totals.get('1-30',0)/100:.2f} · "
+              f"31-60 {totals.get('31-60',0)/100:.2f} · 60+ {totals.get('60+',0)/100:.2f})")
+
+
+def cmd_notes(args):
+    token = require_auth(args.base)
+    client_id = resolve_client_id(args.base, token, args.client_id)
+    status, data = request(args.base, f"/api/clients/{client_id}/notes", token=token)
+    if status != 200:
+        die(f"notes failed (HTTP {status}): {data}")
+    print(json.dumps(data or {}, indent=2, default=str))
+
+
+def cmd_note_add(args):
+    token = require_auth(args.base)
+    client_id = resolve_client_id(args.base, token, args.client_id)
+    status, data = request(args.base, f"/api/clients/{client_id}/notes", method="POST", token=token,
+                           payload={"body": args.body, "author": args.author or ""})
+    if status not in (200, 201):
+        die(f"note-add failed (HTTP {status}): {data}")
+    print(json.dumps(data or {}, indent=2, default=str))
+
+
 def cmd_summary_patch(args):
     override = summary_override_from(args)
+    if args.desc is not None:
+        override["description"] = args.desc
     if not override:
-        die("summary-patch needs at least one of --title/--overview/--highlight/--deliverable/--next-step/--summary-file.")
+        die("summary-patch needs at least one of --desc/--title/--overview/--highlight/--deliverable/--next-step/--summary-file.")
     token = require_auth(args.base)
     status, data = request(args.base, f"/api/invoices/{args.id}/summary", method="PATCH", token=token, payload=override)
     if status != 200:
@@ -797,8 +894,27 @@ def main():
     nt.add_argument("--id", required=True)
     nt.add_argument("--yes", action="store_true")
 
+    mp = sub.add_parser("mark-paid")
+    mp.add_argument("--id", required=True)
+    mp.add_argument("--amount-cents", type=int, help="omit to settle the full remaining balance")
+    mp.add_argument("--reference", help="e-transfer confirmation, wire reference, cheque number")
+    mp.add_argument("--channel", default="manual", help="etransfer, wire, cheque, …")
+    mp.add_argument("--paid-at", help="ISO timestamp; defaults to now")
+
+    ou = sub.add_parser("outstanding")
+    ou.add_argument("--json", action="store_true")
+
+    no = sub.add_parser("notes")
+    no.add_argument("--client-id", required=True, help="client ID or exact name")
+
+    na = sub.add_parser("note-add")
+    na.add_argument("--client-id", required=True, help="client ID or exact name")
+    na.add_argument("--body", required=True)
+    na.add_argument("--author")
+
     sp = sub.add_parser("summary-patch")
     sp.add_argument("--id", required=True)
+    sp.add_argument("--desc", help="replace the manual work description (pass \"\" to clear it)")
     add_summary_override_args(sp)
 
     pi = sub.add_parser("portal-invoice")
@@ -819,11 +935,22 @@ def main():
     ca.add_argument("--phone")
     ca.add_argument("--address")
     ca.add_argument("--website")
+    ca.add_argument("--github-repo", action="append", help="repeatable")
+    ca.add_argument("--github-author")
+    ca.add_argument("--project-context")
+    ca.add_argument("--summary-priorities")
     ca.add_argument("--currency", default="CAD")
     ca.add_argument("--payment-method", choices=PAYMENT_METHODS, default="wire")
+    ca.add_argument("--payment-days", type=int, default=0)
+    ca.add_argument("--payment-terms", default="Due on receipt")
+    ca.add_argument("--cadence", default="manual")
+    ca.add_argument("--billing-day", type=int, default=1)
+    ca.add_argument("--tax-rate", type=float, default=0)
+    ca.add_argument("--special-terms", default="")
     ca.add_argument("--model", choices=["hourly", "flat"], default="hourly")
     ca.add_argument("--rate-cents", type=int, default=0)
     ca.add_argument("--portal-password")
+    ca.add_argument("--meta", action="append", help="key=value, repeatable; agent-set fields never shown on the invoice")
     cu = sub.add_parser("client-update")
     cu.add_argument("--id", required=True)
     cu.add_argument("--name", help="company billed on the invoice")
@@ -833,12 +960,23 @@ def main():
     cu.add_argument("--phone")
     cu.add_argument("--address")
     cu.add_argument("--website")
+    cu.add_argument("--github-repo", action="append", help="repeatable")
+    cu.add_argument("--github-author")
+    cu.add_argument("--project-context")
+    cu.add_argument("--summary-priorities")
     cu.add_argument("--currency")
     cu.add_argument("--payment-method", choices=PAYMENT_METHODS)
+    cu.add_argument("--payment-days", type=int)
+    cu.add_argument("--payment-terms")
+    cu.add_argument("--cadence")
+    cu.add_argument("--billing-day", type=int)
+    cu.add_argument("--tax-rate", type=float)
+    cu.add_argument("--special-terms")
     cu.add_argument("--model", choices=["hourly", "flat"])
     cu.add_argument("--rate-cents", type=int)
     cu.add_argument("--active", type=lambda s: s.lower() in ("1", "true", "yes"))
     cu.add_argument("--portal-password")
+    cu.add_argument("--meta", action="append", help="key=value, repeatable; merged onto existing metadata")
     cd = sub.add_parser("client-delete")
     cd.add_argument("--id", required=True)
     cd.add_argument("--yes", action="store_true")
@@ -874,6 +1012,8 @@ def main():
           "operators": cmd_operators, "operator-add": cmd_operator_add,
           "status": cmd_status, "recover": cmd_recover, "time": cmd_time,
           "versions": cmd_versions, "notify": cmd_notify,
+          "mark-paid": cmd_mark_paid, "outstanding": cmd_outstanding,
+          "notes": cmd_notes, "note-add": cmd_note_add,
           "summary-patch": cmd_summary_patch, "portal-dispute": cmd_portal_dispute,
           "portal-invoice": cmd_portal_invoice}[args.cmd]
     fn(args)

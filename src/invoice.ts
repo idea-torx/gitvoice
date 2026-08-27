@@ -36,6 +36,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica
 .work-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 8mm; margin-top: 4mm; }
 .work-columns ul { margin: 2mm 0 0; padding-left: 4mm; }
 .work-columns li { margin: 1.2mm 0; color: #424245; font-size: 9px; line-height: 1.4; }
+.work-note { margin-top: 4mm; padding-top: 3.5mm; border-top: 1px solid rgba(0, 0, 0, .07); }
+.work-note .label { margin-bottom: 1.5mm; }
+.work-note p { margin: 0; color: #424245; font-size: 9.5px; line-height: 1.55; white-space: pre-line; overflow-wrap: anywhere; }
 .billing-card { margin-top: 4mm; overflow: hidden; border: 1px solid var(--line); border-radius: 4mm; }
 .billing-row { display: grid; grid-template-columns: 1fr auto; gap: 8mm; align-items: baseline; padding: 3mm 4.5mm; border-bottom: 1px solid var(--line); }
 .billing-row:last-child { border-bottom: 0; }
@@ -65,7 +68,14 @@ body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica
 .timeline-list { margin-top: 1mm; }
 .timeline-row { position: relative; display: grid; grid-template-columns: 28mm 38mm 1fr 17mm; gap: 4mm; align-items: start; padding: 4.5mm 3mm 4.5mm 5mm; border-bottom: 1px solid var(--line); }
 .timeline-row::before { content: ""; position: absolute; top: 5mm; left: 1mm; width: 2mm; height: 2mm; border-radius: 50%; background: var(--blue); }
+.timeline-row.no-count { grid-template-columns: 30mm 46mm 1fr; }
 .timeline-row:last-child { border-bottom: 0; }
+.scope-card { margin: 7mm 0 8mm; border-radius: 4mm; padding: 5mm 5.5mm; background: var(--soft); }
+.scope-card .label { margin-bottom: 2.5mm; }
+.scope-copy { margin: 0; color: #424245; font-size: 10px; line-height: 1.6; white-space: pre-line; overflow-wrap: anywhere; }
+.next-steps { margin-top: 7mm; border-radius: 4mm; padding: 4.5mm 5mm; background: var(--blue-soft); }
+.next-steps ul { margin: 2mm 0 0; padding-left: 4mm; }
+.next-steps li { margin: 1.5mm 0; color: #424245; font-size: 9.5px; line-height: 1.45; }
 .timeline-period { color: var(--muted); font-size: 9px; }
 .timeline-row h3 { margin: 0; font-size: 10px; font-weight: 650; }
 .timeline-detail { color: #515154; font-size: 9.5px; line-height: 1.5; }
@@ -102,7 +112,10 @@ function renderCoverPage(invoice: InvoiceDraft | InvoiceRecord): string {
   const summary = invoice.summary;
   const highlights = summary.highlights.slice(0, 4);
   const deliverables = summary.deliverables.slice(0, 4);
-  const sourceNote = summary.source === "openai" ? "AI-assisted summary grounded in GitHub activity" : "Generated from verified GitHub commit activity";
+  const hasActivity = invoice.activity.commits.length > 0;
+  const sourceNote = hasActivity
+    ? summary.source === "openai" ? "AI-assisted summary grounded in GitHub activity" : "Generated from verified GitHub commit activity"
+    : "Prepared from the work description recorded for this billing period";
   const invoiceNumber = invoice.number || "DRAFT";
   const logoSrc = invoice.provider.logoUrl || DEFAULT_LOGO_DATA_URI;
   const logoAlt = invoice.provider.businessName || "Gitvoice";
@@ -114,8 +127,8 @@ function renderCoverPage(invoice: InvoiceDraft | InvoiceRecord): string {
     <header class="doc-header"><div><img class="invoice-logo" src="${escapeAttribute(logoSrc)}" alt="${escapeHtml(logoAlt)}"><div class="brand-subtitle">Independent services</div></div><div class="document-mark"><p class="eyebrow">Invoice</p><strong>${escapeHtml(invoiceNumber)}</strong></div></header>
     <section class="cover-hero"><div><p class="hero-kicker">Invoice for ${escapeHtml(invoice.client.name)}</p><h1 class="hero-title">${escapeHtml(summary.title || "Professional services")}</h1><p class="hero-period">Billing period · ${escapeHtml(period)}</p></div><div class="amount-card"><p class="label">Total due</p><strong>${formatMoney(invoice.totalCents, invoice.client.currency)}</strong></div></section>
     <section class="info-grid"><div class="info-card"><p class="label">Billed to</p><div class="info-value">${escapeHtml(invoice.client.name)}</div><div class="info-detail">${contact ? `Attn: ${escapeHtml(contact)}\n` : ""}${escapeHtml(invoice.client.address || "Address not provided")}${invoice.client.email ? `\n${escapeHtml(invoice.client.email)}` : ""}${invoice.client.phone ? `\n${escapeHtml(invoice.client.phone)}` : ""}${invoice.client.website ? `\n${escapeHtml(invoice.client.website)}` : ""}</div></div><div class="info-card"><p class="label">Dates</p><div class="info-value">Issued ${issuedDate}</div><div class="info-detail">Due ${dueDate}</div></div><div class="info-card"><p class="label">Payment</p><div class="info-value">${escapeHtml(paymentMethodLabel(invoice.client.paymentMethod))}</div><div class="info-detail">${escapeHtml(invoice.client.paymentTerms)} · Ref ${escapeHtml(invoiceNumber)}</div></div></section>
-    <section class="work-card"><div class="work-card-header"><div><p class="label" style="margin-bottom:2mm">Work completed</p><h2>${escapeHtml(summary.title)}</h2></div><div class="source-note">${escapeHtml(sourceNote)}</div></div><p class="summary-copy">${escapeHtml(summary.overview)}</p>${summary.notes ? `<div class="notes-copy" style="margin-top:4mm"><strong>Work details:</strong> ${escapeHtml(summary.notes)}</div>` : ""}${"manualDescription" in invoice && invoice.manualDescription ? `<div class="notes-copy" style="margin-top:4mm"><strong>Special note:</strong> ${escapeHtml(invoice.manualDescription)}</div>` : ""}${highlights.length || deliverables.length ? `<div class="work-columns">${highlights.length ? `<div><p class="label">Highlights</p><ul>${highlights.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>` : ""}${deliverables.length ? `<div><p class="label">Deliverables</p><ul>${deliverables.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>` : ""}</div>` : ""}</section>
-    <section class="billing-card"><div class="billing-row"><span>${escapeHtml(invoice.pricing.description || "Professional services")}</span><strong>${escapeHtml(formatPricing(invoice))}</strong></div><div class="billing-row"><span>GitHub activity</span><strong>${invoice.activity.commits.length} commits · ${invoice.activity.filesChanged} files · ${invoice.activity.repositories.length} repo${invoice.activity.repositories.length === 1 ? "" : "s"}</strong></div><div class="billing-row"><span>Subtotal</span><strong>${formatMoney(invoice.subtotalCents, invoice.client.currency)}</strong></div>${invoice.taxCents ? `<div class="billing-row"><span>Tax (${formatTaxRate(invoice.client.taxRate)}%)</span><strong>${formatMoney(invoice.taxCents, invoice.client.currency)}</strong></div>` : ""}<div class="billing-row billing-total"><span>Total due</span><strong>${formatMoney(invoice.totalCents, invoice.client.currency)}</strong></div></section>
+    <section class="work-card"><div class="work-card-header"><div><p class="label" style="margin-bottom:2mm">Work completed</p><h2>${escapeHtml(summary.title)}</h2></div><div class="source-note">${escapeHtml(sourceNote)}</div></div><p class="summary-copy">${escapeHtml(summary.overview)}</p>${summary.notes ? `<div class="work-note"><p class="label">Work details</p><p>${escapeHtml(summary.notes)}</p></div>` : ""}${invoice.manualDescription && !movesToSummaryPage(invoice) ? `<div class="work-note"><p class="label">Special note</p><p>${escapeHtml(invoice.manualDescription)}</p></div>` : ""}${highlights.length || deliverables.length ? `<div class="work-columns">${highlights.length ? `<div><p class="label">Highlights</p><ul>${highlights.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>` : ""}${deliverables.length ? `<div><p class="label">Deliverables</p><ul>${deliverables.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>` : ""}</div>` : ""}</section>
+    <section class="billing-card"><div class="billing-row"><span>${escapeHtml(invoice.pricing.description || "Professional services")}</span><strong>${escapeHtml(formatPricing(invoice))}</strong></div>${hasActivity ? `<div class="billing-row"><span>GitHub activity</span><strong>${invoice.activity.commits.length} commits · ${invoice.activity.filesChanged} files · ${invoice.activity.repositories.length} repo${invoice.activity.repositories.length === 1 ? "" : "s"}</strong></div>` : ""}<div class="billing-row"><span>Subtotal</span><strong>${formatMoney(invoice.subtotalCents, invoice.client.currency)}</strong></div>${invoice.taxCents ? `<div class="billing-row"><span>Tax (${formatTaxRate(invoice.client.taxRate)}%)</span><strong>${formatMoney(invoice.taxCents, invoice.client.currency)}</strong></div>` : ""}<div class="billing-row billing-total"><span>Total due</span><strong>${formatMoney(invoice.totalCents, invoice.client.currency)}</strong></div></section>
     ${invoice.client.specialTerms ? `<div class="terms-note"><strong>Special terms:</strong> ${escapeHtml(invoice.client.specialTerms)}</div>` : ""}
     <footer class="cover-footer"><div class="footer-block"><p class="label">Service provider</p><strong>${escapeHtml(invoice.provider.providerName)}</strong><div class="footer-copy">${escapeHtml(invoice.provider.address)}${invoice.provider.email ? `\n${escapeHtml(invoice.provider.email)}` : ""}</div><div class="footer-meta">${invoice.provider.website ? `<span>${escapeHtml(invoice.provider.website)}</span>` : ""}${invoice.provider.taxId ? `<span>Tax ID ${escapeHtml(invoice.provider.taxId)}</span>` : ""}</div></div><div class="footer-block"><p class="label">Payment instructions · ${escapeHtml(paymentMethodLabel(invoice.client.paymentMethod))}</p><strong>Use ${escapeHtml(invoiceNumber)} as the payment reference</strong><div class="footer-copy">${escapeHtml(paymentInstructions(invoice))}</div></div></footer>
   </div></section>`;
@@ -131,9 +144,35 @@ function renderActivityPage(invoice: InvoiceDraft | InvoiceRecord, commits: Invo
   }).join("")}</tbody></table><footer class="activity-footer"><span>${escapeHtml(invoice.provider.businessName)}</span><span>${escapeHtml(invoice.number || "Draft")}</span></footer></div></section>`;
 }
 
+/**
+ * True when the work summary page exists and is the better home for the operator's own
+ * description — i.e. the invoice has no commit evidence to lead with instead.
+ */
+function movesToSummaryPage(invoice: InvoiceDraft | InvoiceRecord): boolean {
+  return Boolean(invoice.manualDescription) && invoice.activity.commits.length === 0 && invoice.summary.timeline.length > 0;
+}
+
 function renderWorkSummaryPage(invoice: InvoiceDraft | InvoiceRecord): string {
+  const hasActivity = invoice.activity.commits.length > 0;
+  const period = `${formatDate(invoice.periodStart, { month: "short", day: "numeric", year: "numeric" })} – ${formatDate(invoice.periodEnd, { month: "short", day: "numeric", year: "numeric" })}`;
   const timeline = invoice.summary.timeline.length ? invoice.summary.timeline : [{ period: "Period", title: "No timeline entries", detail: "No dated GitHub commits were available for this billing period.", commits: 0 }];
-  return `<section class="invoice-page summary-page"><div class="page-inner"><header class="summary-header"><div><div class="eyebrow">${escapeHtml(invoice.number || "Draft invoice")}</div><h1>Work summary</h1></div><div class="page-number">Page 2</div></header><p class="summary-intro">${escapeHtml(invoice.summary.activitySummary)} The timeline below is built from dated GitHub activity so the sequence of work is easy to review.</p><div class="summary-metrics"><div class="summary-metric"><div class="eyebrow">Commits</div><strong>${invoice.activity.commits.length}</strong></div><div class="summary-metric"><div class="eyebrow">Files changed</div><strong>${invoice.activity.filesChanged}</strong></div><div class="summary-metric"><div class="eyebrow">Repositories</div><strong>${invoice.activity.repositories.length}</strong></div><div class="summary-metric"><div class="eyebrow">Contributors</div><strong>${invoice.activity.contributors.length}</strong></div></div><div class="timeline-heading"><h2>Timeline of work</h2><span>${formatDate(invoice.periodStart, { month: "short", day: "numeric", year: "numeric" })} – ${formatDate(invoice.periodEnd, { month: "short", day: "numeric", year: "numeric" })}</span></div><div class="timeline-list">${timeline.map((entry) => `<div class="timeline-row"><div class="timeline-period">${escapeHtml(entry.period)}</div><h3>${escapeHtml(entry.title)}</h3><div class="timeline-detail">${escapeHtml(entry.detail)}</div><div class="timeline-count">${entry.commits} commit${entry.commits === 1 ? "" : "s"}</div></div>`).join("")}</div><p class="timeline-note">The following page${invoice.activity.commits.length === 1 ? " contains the raw commit" : "s contain the raw commits"} used to create this summary.</p><footer class="activity-footer"><span>${escapeHtml(invoice.provider.businessName)}</span><span>${escapeHtml(invoice.number || "Draft")}</span></footer></div></section>`;
+  const nextSteps = invoice.summary.nextSteps.slice(0, 3);
+  // Without commit evidence the metrics grid and the raw-commit pointer are all zeroes and dead
+  // links, so the page leads with the recorded scope of work instead.
+  const lede = hasActivity
+    ? `${escapeHtml(invoice.summary.activitySummary)} The timeline below is built from dated GitHub activity so the sequence of work is easy to review.`
+    : escapeHtml(invoice.summary.activitySummary);
+  const evidence = hasActivity
+    ? `<div class="summary-metrics"><div class="summary-metric"><div class="eyebrow">Commits</div><strong>${invoice.activity.commits.length}</strong></div><div class="summary-metric"><div class="eyebrow">Files changed</div><strong>${invoice.activity.filesChanged}</strong></div><div class="summary-metric"><div class="eyebrow">Repositories</div><strong>${invoice.activity.repositories.length}</strong></div><div class="summary-metric"><div class="eyebrow">Contributors</div><strong>${invoice.activity.contributors.length}</strong></div></div>`
+    : movesToSummaryPage(invoice)
+      ? `<div class="scope-card"><p class="label">Scope of work</p><p class="scope-copy">${escapeHtml(invoice.manualDescription || "")}</p></div>`
+      : "";
+  const closing = hasActivity
+    ? `<p class="timeline-note">The following page${invoice.activity.commits.length === 1 ? " contains the raw commit" : "s contain the raw commits"} used to create this summary.</p>`
+    : nextSteps.length
+      ? `<div class="next-steps"><p class="label">Next steps</p><ul>${nextSteps.map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ul></div>`
+      : "";
+  return `<section class="invoice-page summary-page"><div class="page-inner"><header class="summary-header"><div><div class="eyebrow">${escapeHtml(invoice.number || "Draft invoice")}</div><h1>Work summary</h1></div><div class="page-number">Page 2</div></header><p class="summary-intro">${lede}</p>${evidence}<div class="timeline-heading"><h2>${hasActivity ? "Timeline of work" : "Project history"}</h2><span>${escapeHtml(period)}</span></div><div class="timeline-list">${timeline.map((entry) => `<div class="timeline-row${hasActivity ? "" : " no-count"}"><div class="timeline-period">${escapeHtml(entry.period)}</div><h3>${escapeHtml(entry.title)}</h3><div class="timeline-detail">${escapeHtml(entry.detail)}</div>${hasActivity ? `<div class="timeline-count">${entry.commits} commit${entry.commits === 1 ? "" : "s"}</div>` : ""}</div>`).join("")}</div>${closing}<footer class="activity-footer"><span>${escapeHtml(invoice.provider.businessName)}</span><span>${escapeHtml(invoice.number || "Draft")}</span></footer></div></section>`;
 }
 
 /** "First Last", dropping whichever half is blank. Empty when the client has no named contact. */

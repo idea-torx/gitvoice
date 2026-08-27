@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import workerSource from "../src/index.ts?raw";
 import cliSource from "../public/agent-cli/gitvoice-agent.py?raw";
-import worker, { allowAuthAttempt, duePeriod, duePeriods, resetAuthRateLimit } from "../src/index";
+import worker, { agingBucket, allowAuthAttempt, duePeriod, duePeriods, resetAuthRateLimit } from "../src/index";
 import { renderInvoiceHtml } from "../src/invoice";
 import { hashPortalPassword, isPortalPasswordCompatible, issuePortalToken, verifyPortalPassword, verifyPortalToken, generateRecoveryCode, issueAdminToken, verifyAdminToken, hashAdminPassword, verifyAdminPassword } from "../src/security";
 import { buildActivityDigest, buildTimeline, fallbackSummary, summarizeManualActivity } from "../src/summary";
-import { createInvoiceRow, normalizeGithubRepositories } from "../src/repository";
+import { createInvoiceRow, normalizeGithubRepositories, recordPayment } from "../src/repository";
 import { collectGithubActivity, matchesGithubAuthor } from "../src/github";
 import type { Client, InvoiceDraft } from "../src/types";
 
@@ -32,6 +32,7 @@ const client: Client = {
   paymentDays: 0,
   specialTerms: "Phase two retainer",
   taxRate: 0,
+  metadata: {},
   active: true,
 };
 
@@ -171,9 +172,9 @@ describe("summary and invoice rendering", () => {
   it("renders work details inside the work completed section", () => {
     const base: InvoiceDraft = { provider: { businessName: "Gitvoice", providerName: "Jane Doe", address: "Vancouver", email: "", website: "", taxId: "", remittance: "Wire details on file" }, client, periodStart: "2026-07-20", periodEnd: "2026-07-26", issuedAt: "2026-07-27T08:00:00Z", dueAt: "2026-07-27T08:00:00Z", subtotalCents: 400000, taxCents: 0, totalCents: 400000, pricing: { model: "flat", amountCents: 400000, description: "Flat project fee" }, summary: { title: "Phase two", overview: "A concise overview.", activitySummary: "One commit.", highlights: [], deliverables: [], nextSteps: [], timeline: [], source: "fallback" }, activity: { commits: [], repositories: [], additions: 0, deletions: 0, filesChanged: 0, contributors: [] } };
     const withoutNotes = renderInvoiceHtml({ ...base, number: "INV-2026-0002" });
-    expect(withoutNotes).not.toContain("Work details:");
+    expect(withoutNotes).not.toContain("Work details");
     const withNotes = renderInvoiceHtml({ ...base, number: "INV-2026-0002", summary: { ...base.summary, notes: "Thanks for your business!\nUse the invoice number as the reference." } });
-    expect(withNotes).toContain("Work details:");
+    expect(withNotes).toContain("Work details");
     expect(withNotes).toContain("Thanks for your business!");
     expect(withNotes).toContain("Use the invoice number as the reference.");
   });
@@ -211,6 +212,37 @@ describe("summary and invoice rendering", () => {
     expect(html).toContain("Engineering services");
     expect(html).toContain("Send the E-transfer to billing@example.com.");
     expect(html).not.toContain("Sensitive wire details");
+  });
+
+  it("renders manual invoices without borrowing GitHub framing", () => {
+    const base: InvoiceDraft = {
+      provider: { businessName: "Gitvoice", providerName: "Jane Doe", address: "Vancouver", email: "billing@example.com", website: "", taxId: "", remittance: "" },
+      client,
+      periodStart: "2026-07-01",
+      periodEnd: "2026-07-31",
+      issuedAt: "2026-08-01T08:00:00Z",
+      dueAt: "2026-08-15T08:00:00Z",
+      subtotalCents: 400000,
+      taxCents: 0,
+      totalCents: 400000,
+      pricing: { model: "flat", amountCents: 400000, description: "Flat project fee" },
+      summary: { title: "Brand refresh", overview: "Overview.", activitySummary: "Scope covered by this invoice.", highlights: [], deliverables: [], nextSteps: ["Book the Q4 review"], timeline: [{ period: "July", title: "Production", detail: "Assets delivered.", commits: 0 }], source: "openai" },
+      activity: { commits: [], repositories: [], additions: 0, deletions: 0, filesChanged: 0, contributors: [] },
+      manualDescription: "Rebuilt the brand system and delivered the asset library.",
+    };
+    const html = renderInvoiceHtml({ ...base, number: "INV-2026-0004" });
+    expect(html).toContain("Project history");
+    expect(html).toContain("Scope of work");
+    expect(html).toContain("Rebuilt the brand system");
+    expect(html).toContain("Book the Q4 review");
+    expect(html).not.toContain("GitHub");
+    expect(html).not.toContain("commits contain the raw commits");
+    expect(html).not.toContain("0 commit");
+
+    // With no timeline there is no summary page, so the description has to stay on the cover.
+    const bare = renderInvoiceHtml({ ...base, number: "INV-2026-0005", summary: { ...base.summary, timeline: [] } });
+    expect(bare).toContain("Special note");
+    expect(bare).toContain("Rebuilt the brand system");
   });
 });
 
@@ -251,6 +283,60 @@ describe("invoice persistence", () => {
 
     expect(preparedSql.match(/\?/g) || []).toHaveLength(18);
     expect(boundValues).toHaveLength(18);
+  });
+});
+
+describe("payment recording", () => {
+  /** A one-row D1 stub: SELECTs return the row, the UPDATE writes back into it. */
+  function stubDb(row: Record<string, unknown>) {
+    return {
+      prepare(sql: string) {
+        return {
+          bind(...values: unknown[]) {
+            return {
+              async first() { return row; },
+              async run() {
+                if (!sql.startsWith("UPDATE invoices SET amount_paid_cents")) return { success: true };
+                const [amount, reference, channel, status, paidAt] = values;
+                Object.assign(row, { amount_paid_cents: amount, payment_reference: reference, payment_channel: channel, status, paid_at: paidAt });
+                return { success: true };
+              },
+            };
+          },
+        };
+      },
+    } as unknown as D1Database;
+  }
+
+  const base = { id: "invoice-1", status: "sent", total_cents: 10000, amount_paid_cents: 0, payment_reference: "", payment_channel: "", paid_at: null };
+
+  it("accumulates part payments and only settles once the balance is cleared", async () => {
+    const row = { ...base };
+    const db = stubDb(row);
+    await recordPayment(db, "invoice-1", { amountCents: 4000, channel: "etransfer", reference: "ET-1" });
+    expect(row.amount_paid_cents).toBe(4000);
+    expect(row.status).toBe("sent");
+    await recordPayment(db, "invoice-1", { amountCents: 6000 });
+    expect(row.amount_paid_cents).toBe(10000);
+    expect(row.status).toBe("paid");
+    expect(row.paid_at).toBeTruthy();
+    // The reference from the first payment survives a later one that omits it.
+    expect(row.payment_reference).toBe("ET-1");
+  });
+
+  it("settles the remaining balance when no amount is given", async () => {
+    const row = { ...base, amount_paid_cents: 2500 };
+    await recordPayment(stubDb(row), "invoice-1", { channel: "wire" });
+    expect(row.amount_paid_cents).toBe(10000);
+    expect(row.status).toBe("paid");
+  });
+
+  it("refuses to mark a voided invoice paid", async () => {
+    await expect(recordPayment(stubDb({ ...base, status: "void" }), "invoice-1", {})).rejects.toThrow("voided");
+  });
+
+  it("buckets balances by how far past due they are", () => {
+    expect([0, -3, 1, 30, 31, 60, 61].map(agingBucket)).toEqual(["current", "current", "1-30", "1-30", "31-60", "31-60", "60+"]);
   });
 });
 

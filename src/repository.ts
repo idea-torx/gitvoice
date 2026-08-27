@@ -3,6 +3,8 @@ import type {
   Cadence,
   Client,
   ClientInput,
+  ClientNote,
+  D1ClientNoteRow,
   D1ClientRow,
   D1InvoiceDisputeRow,
   D1InvoiceRow,
@@ -52,6 +54,7 @@ export function rowToClient(row: D1ClientRow): Client {
     specialTerms: row.special_terms,
     taxRate: row.tax_rate,
     active: row.active === 1,
+    metadata: parseMetadata(row.metadata),
     portalPasswordSet: isPortalPasswordCompatible(row.portal_password_hash, row.portal_password_salt),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -96,6 +99,11 @@ export function rowToInvoice(row: D1InvoiceRow, client: Client, provider: Provid
       contributors: [],
     }),
     manualDescription: row.manual_description || undefined,
+    paidAt: row.paid_at || undefined,
+    amountPaidCents: Number(row.amount_paid_cents || 0),
+    paymentReference: row.payment_reference || undefined,
+    paymentChannel: row.payment_channel || undefined,
+    sentAt: row.sent_at || undefined,
     pdfKey: row.pdf_key,
     createdAt: row.created_at,
   };
@@ -167,8 +175,8 @@ export async function upsertClient(db: D1Database, input: ClientInput): Promise<
         id, name, contact_first_name, contact_last_name, email, phone, address, website,
         github_repos, github_author, project_context, summary_priorities, cadence, billing_day,
         billing_model, flat_amount_cents, default_hours, currency, payment_method, payment_terms, payment_days, special_terms, tax_rate,
-        portal_password_hash, portal_password_salt, active, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        metadata, portal_password_hash, portal_password_salt, active, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         contact_first_name = excluded.contact_first_name,
@@ -192,6 +200,7 @@ export async function upsertClient(db: D1Database, input: ClientInput): Promise<
         payment_days = excluded.payment_days,
         special_terms = excluded.special_terms,
         tax_rate = excluded.tax_rate,
+        metadata = excluded.metadata,
         portal_password_hash = CASE WHEN excluded.portal_password_hash <> '' THEN excluded.portal_password_hash ELSE clients.portal_password_hash END,
         portal_password_salt = CASE WHEN excluded.portal_password_salt <> '' THEN excluded.portal_password_salt ELSE clients.portal_password_salt END,
         active = excluded.active,
@@ -221,6 +230,7 @@ export async function upsertClient(db: D1Database, input: ClientInput): Promise<
       normalized.paymentDays,
       normalized.specialTerms,
       normalized.taxRate,
+      JSON.stringify(normalized.metadata),
       portalCredentials.hash,
       portalCredentials.salt,
       normalized.active ? 1 : 0,
@@ -373,8 +383,23 @@ function normalizeClientInput(input: ClientInput): Client {
     paymentDays: Math.max(0, Math.min(365, Math.floor(input.paymentDays || 0))),
     specialTerms: input.specialTerms?.trim() || "",
     taxRate: Math.max(0, Math.min(100, Number(input.taxRate) || 0)),
+    metadata: normalizeMetadata(input.metadata),
     active: input.active !== false,
   };
+}
+
+/** Metadata is stored as flat string values so it stays greppable and safe to render anywhere. */
+function normalizeMetadata(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([key, entry]) => key.trim() && entry !== null && entry !== undefined && entry !== "")
+    .slice(0, 50)
+    .map(([key, entry]) => [key.trim().slice(0, 60), String(entry).slice(0, 500)] as const);
+  return Object.fromEntries(entries);
+}
+
+function parseMetadata(value: string | null | undefined): Record<string, string> {
+  return normalizeMetadata(parseJson<unknown>(value || "{}", {}));
 }
 
 export function normalizeGithubRepositories(values: string[]): string[] {
@@ -522,14 +547,80 @@ export async function reissueInvoice(db: D1Database, id: string): Promise<D1Invo
   return updated;
 }
 
+/**
+ * The only writer of payment state. Stripe webhooks and manually entered e-transfer/wire
+ * payments both land here so every payment is recorded the same way.
+ * Amounts accumulate: a part payment records the money without settling the invoice.
+ */
+export async function recordPayment(
+  db: D1Database,
+  id: string,
+  payment: { amountCents?: number; reference?: string; channel?: string; paidAt?: string },
+): Promise<D1InvoiceRow> {
+  const row = await getInvoiceRow(db, id);
+  if (!row) throw new Error("Invoice not found");
+  if (row.status === "void") throw new Error("A voided invoice cannot be marked paid");
+  const requested = Number(payment.amountCents);
+  const amount = Number.isFinite(requested) && requested > 0 ? Math.round(requested) : row.total_cents - Number(row.amount_paid_cents || 0);
+  const paidTotal = Number(row.amount_paid_cents || 0) + Math.max(0, amount);
+  const settled = paidTotal >= row.total_cents;
+  await db
+    .prepare("UPDATE invoices SET amount_paid_cents = ?, payment_reference = ?, payment_channel = ?, status = ?, paid_at = ?, version = version + 1 WHERE id = ?")
+    .bind(
+      paidTotal,
+      (payment.reference || row.payment_reference || "").slice(0, 200),
+      (payment.channel || row.payment_channel || "").slice(0, 40),
+      settled ? "paid" : row.status,
+      settled ? payment.paidAt || new Date().toISOString() : row.paid_at ?? null,
+      id,
+    )
+    .run();
+  const updated = await getInvoiceRow(db, id);
+  if (!updated) throw new Error("Invoice not found after payment");
+  return updated;
+}
+
 export async function markInvoicePaid(db: D1Database, id: string, provider: string, eventId: string, payload: string): Promise<D1InvoiceRow> {
   const existing = await db.prepare("SELECT 1 FROM webhook_events WHERE provider = ? AND event_id = ?").bind(provider, eventId).first();
   if (existing) throw new Error("Webhook event already processed");
   await db.prepare("INSERT INTO webhook_events (id, invoice_id, provider, event_id, payload) VALUES (?, ?, ?, ?, ?)").bind(crypto.randomUUID(), id, provider, eventId, payload).run();
-  await db.prepare("UPDATE invoices SET status = 'paid', version = version + 1 WHERE id = ?").bind(id).run();
-  const row = await getInvoiceRow(db, id);
-  if (!row) throw new Error("Invoice not found");
-  return row;
+  return recordPayment(db, id, { channel: provider, reference: eventId });
+}
+
+/** Records that the invoice reached the client. Only a freshly generated invoice moves to `sent`. */
+export async function markInvoiceSent(db: D1Database, id: string): Promise<void> {
+  await db.prepare("UPDATE invoices SET sent_at = ?, status = CASE WHEN status = 'generated' THEN 'sent' ELSE status END WHERE id = ?").bind(new Date().toISOString(), id).run();
+}
+
+export async function markInvoiceReminded(db: D1Database, id: string): Promise<void> {
+  await db.prepare("UPDATE invoices SET reminded_at = ? WHERE id = ?").bind(new Date().toISOString(), id).run();
+}
+
+/** Every invoice still owing money, oldest due date first. `dueBefore` narrows it to the overdue ones. */
+export async function listOutstandingInvoices(db: D1Database, dueBefore?: string): Promise<D1InvoiceRow[]> {
+  const query = "SELECT * FROM invoices WHERE status NOT IN ('paid', 'void') AND total_cents > amount_paid_cents";
+  const statement = dueBefore
+    ? db.prepare(`${query} AND due_at < ? ORDER BY due_at`).bind(dueBefore)
+    : db.prepare(`${query} ORDER BY due_at`);
+  const { results } = await statement.all<D1InvoiceRow>();
+  return results;
+}
+
+// ── Client notes ────────────────────────────────────────────────────────────
+
+export async function listClientNotes(db: D1Database, clientId: string): Promise<ClientNote[]> {
+  const { results } = await db.prepare("SELECT * FROM client_notes WHERE client_id = ? ORDER BY created_at DESC LIMIT 200").bind(clientId).all<D1ClientNoteRow>();
+  return results.map((row) => ({ id: row.id, clientId: row.client_id, body: row.body, author: row.author, createdAt: row.created_at }));
+}
+
+export async function addClientNote(db: D1Database, clientId: string, body: string, author: string): Promise<ClientNote> {
+  const note = body.trim();
+  if (!note) throw new Error("Note body is required");
+  const id = crypto.randomUUID();
+  await db.prepare("INSERT INTO client_notes (id, client_id, body, author) VALUES (?, ?, ?, ?)").bind(id, clientId, note.slice(0, 4000), author.trim().slice(0, 120)).run();
+  const row = await db.prepare("SELECT * FROM client_notes WHERE id = ?").bind(id).first<D1ClientNoteRow>();
+  if (!row) throw new Error("Note could not be saved");
+  return { id: row.id, clientId: row.client_id, body: row.body, author: row.author, createdAt: row.created_at };
 }
 
 // ── Time entries ────────────────────────────────────────────────────────────
