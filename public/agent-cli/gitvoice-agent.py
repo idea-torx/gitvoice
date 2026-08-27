@@ -125,16 +125,20 @@ def auth(base, force=False):
         cached = json.load(open(TOKEN_CACHE))
         if cached.get("base") == base and cached.get("expiresAt", 0) > time.time() + 300:
             return cached["token"]
-    status, data = request(base, "/api/auth", method="POST", payload={"password": keychain_secret()})
-    token = (data or {}).get("token")
+    secret = keychain_secret()
+    status, data = request(base, "/api/auth", method="POST", payload={"password": secret})
+    token, ttl = (data or {}).get("token"), 29 * 86400
     if status != 200 or not token:
-        die(f"auth failed (HTTP {status}): {data}")
+        # A standing operator token is already a bearer credential and needs no login round trip.
+        if request(base, "/api/bootstrap", token=secret)[0] != 200:
+            die(f"auth failed (HTTP {status}): {data}")
+        token, ttl = secret, 365 * 86400
     os.makedirs(STATE_DIR, exist_ok=True)
-    # token TTL is 30 days from issue
-    json.dump({"base": base, "token": token, "expiresAt": time.time() + 29 * 86400},
+    # Sessions expire 30 days after issue; a standing operator token does not.
+    json.dump({"base": base, "token": token, "expiresAt": time.time() + ttl},
               open(TOKEN_CACHE, "w"))
     os.chmod(TOKEN_CACHE, 0o600)
-    print(f"auth ok (token cached until +29d, base={base})")
+    print(f"auth ok (cached {int(ttl / 86400)}d, base={base})")
     return token
 
 
